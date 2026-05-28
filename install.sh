@@ -2,7 +2,7 @@
 # install.sh — UNBLOCK CLI installer for Linux + macOS
 #
 # Usage:
-#   curl -sSL install.unblock.app | sh
+#   curl -sSL install.kaeva.app | sh
 #
 # What it does (idempotent):
 #   1. Detect OS (linux/darwin) + arch (x64/arm64)
