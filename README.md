@@ -1,22 +1,22 @@
 # unblock-install
 
-Hosting source for **install.unblock.app** — the one-liner installer for the [UNBLOCK CLI](https://github.com/Viraj0518/unblock_cli).
+Hosting source for **install.kaeva.app** — the one-liner installer for the [UNBLOCK CLI](https://github.com/Viraj0518/unblock_cli).
 
 ## Usage
 
 - **Linux / macOS**
 
   ```sh
-  curl -sSL install.unblock.app | sh
+  curl -sSL install.kaeva.app | sh
   ```
 
 - **Windows (PowerShell)**
 
   ```powershell
-  iwr -useb install.unblock.app | iex
+  iwr -useb install.kaeva.app | iex
   ```
 
-  PowerShell clients are content-negotiated to `install.ps1` automatically. Explicit form: `iwr -useb install.unblock.app/install.ps1 | iex`.
+  PowerShell clients are content-negotiated to `install.ps1` automatically. Explicit form: `iwr -useb install.kaeva.app/install.ps1 | iex`.
 
 ## What the installer does
 
@@ -108,12 +108,13 @@ is not yet performed.
 
 ## Cloudflare Pages binding
 
-This repo is wired to **`install.unblock.app`** via Cloudflare Pages:
+This repo is wired to **`install.kaeva.app`** via Cloudflare Pages:
 
 1. Pages → **Create project** → **Connect to Git** → `Viraj0518/unblock-install` → `main` branch.
 2. Build command: *(none — static)*. Output directory: `/`.
-3. **Custom domains** → add `install.unblock.app` (CNAME to `<project>.pages.dev`).
+3. **Custom domains** → add `install.kaeva.app` (CNAME to `<project>.pages.dev`, orange-cloud proxied for auto-cert).
 4. The Pages Function at `functions/index.js` handles UA-based content negotiation for `/`.
+5. (Optional, post-YC) Add `install.unblock.app` as a transitional-alias custom domain so the legacy URL keeps resolving during rebrand.
 
 ## Local testing
 

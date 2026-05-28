@@ -1,7 +1,7 @@
 # install.ps1 -- UNBLOCK CLI installer for Windows (PowerShell 5.1+)
 #
 # Usage:
-#   iwr -useb install.unblock.app | iex
+#   iwr -useb install.kaeva.app | iex
 #
 # What it does (idempotent):
 #   1. Detect arch (x64/arm64)
