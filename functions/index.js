@@ -1,8 +1,13 @@
 // Cloudflare Pages Function — content negotiation for `/`.
 //
 // curl / wget / PowerShell iwr -useb do NOT send Accept: text/html, so we
-// stream install.sh directly. Browsers (Accept: text/html) get index.html.
+// stream install.sh directly. Browsers (Accept: text/html) get landing.html.
 // `?ps1=1` or a User-Agent containing "powershell" forces install.ps1.
+//
+// Why landing.html (not index.html): CF Pages auto-canonicalizes any
+// /index.html request to /, which re-enters this function -> infinite
+// 308 loop. Using a non-magic filename breaks the cycle. Observed bug
+// at install.kaeva.app standup 2026-05-28 17:23 UTC.
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -14,8 +19,9 @@ export async function onRequest(context) {
   const isBrowser = accept.includes('text/html');
 
   if (isBrowser && !wantsPs1) {
-    // Let the static asset handler serve /index.html
-    return env.ASSETS.fetch(new Request(new URL('/index.html', url), request));
+    // Static asset; non-magic filename avoids CF Pages' /index.html -> /
+    // canonical redirect that would loop back through this function.
+    return env.ASSETS.fetch(new Request(new URL('/landing.html', url), request));
   }
 
   const target = wantsPs1 ? '/install.ps1' : '/install.sh';
