@@ -1,0 +1,8 @@
+# Cloudflare Pages routing.
+#
+# Note: CF Pages _redirects does NOT support header-conditional rules,
+# so content-negotiation for `/` (curl vs browser) is handled in
+# functions/index.js. This file only handles explicit paths.
+
+/install.sh   /install.sh   200
+/install.ps1  /install.ps1  200

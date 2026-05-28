@@ -1,0 +1,14 @@
+# Always commit these with LF line endings — they're piped to `sh` from CF Pages
+# and CRLF would break the shebang / heredocs.
+*.sh   text eol=lf
+*.ps1  text eol=lf
+_redirects text eol=lf
+_headers   text eol=lf
+*.html text eol=lf
+*.js   text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+
+# Binary-safe sentinels
+*.png binary
+*.jpg binary

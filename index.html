@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>install.unblock.app</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="UNBLOCK CLI installer. curl -sSL install.unblock.app | sh">
+<!--
+  This page is only ever rendered to humans hitting install.unblock.app in a browser.
+  Shell/PowerShell pipes are served directly via Cloudflare Pages routing rules
+  in `_redirects`:
+    /         -> /install.sh  (302) when Accept does NOT include text/html
+    /install.sh   -> raw file
+    /install.ps1  -> raw file
+-->
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         max-width: 720px; margin: 6em auto; padding: 0 1.5em; }
+  h1 { font-weight: 600; letter-spacing: -.02em; }
+  pre { background: rgba(127,127,127,.12); padding: 1em 1.2em; border-radius: 8px; overflow-x: auto; }
+  code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  a { color: #4a8cff; }
+  small { opacity: .65; }
+</style>
+</head>
+<body>
+<h1>install.unblock.app</h1>
+<p>Installer for the <strong>UNBLOCK</strong> CLI.</p>
+
+<h3>Linux &amp; macOS</h3>
+<pre><code>curl -sSL install.unblock.app | sh</code></pre>
+
+<h3>Windows (PowerShell)</h3>
+<pre><code>iwr -useb install.unblock.app/install.ps1 | iex</code></pre>
+
+<p><small>
+  Source: <a href="https://github.com/Viraj0518/unblock-install">github.com/Viraj0518/unblock-install</a> ·
+  CLI: <a href="https://github.com/Viraj0518/unblock_cli">github.com/Viraj0518/unblock_cli</a>
+</small></p>
+</body>
+</html>
