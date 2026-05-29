@@ -18,8 +18,13 @@
 #   1 failure
 #   2 already installed (skipped)
 #
-# TODO(v2): cosign signature verification of the release artifact.
-#           For v1 we rely on sha256 checksums + HTTPS to github.com.
+# Trust model:
+#   1. HTTPS to github.com (CA-anchored).
+#   2. sha256 against SHA256SUMS published in the same release.
+#   3. (optional) cosign keyless verification of SHA256SUMS when cosign is
+#      on PATH AND the release contains SHA256SUMS.cosign.bundle. Missing
+#      bundle == warn-and-skip (so the installer works against releases
+#      that pre-date workflow signing). Failed verify == abort.
 
 set -eu
 
@@ -188,6 +193,43 @@ main() {
         exit 1
       fi
       log "sha256 verified"
+    fi
+
+    # Optional: cosign keyless verification of SHA256SUMS. We only attempt
+    # this when (a) cosign is on PATH and (b) the release ships a
+    # SHA256SUMS.cosign.bundle. If either is missing we warn-and-skip,
+    # since sha256 over HTTPS is already a meaningful trust floor.
+    # If cosign IS present and the bundle exists but verify fails, we
+    # abort — a failed signature is louder than a missing one.
+    if have cosign; then
+      bundle_url="${base_url}/SHA256SUMS.cosign.bundle"
+      bundle_path="${TMP_DIR}/SHA256SUMS.cosign.bundle"
+      if download "$bundle_url" "$bundle_path" 2>/dev/null && [ -s "$bundle_path" ]; then
+        # Cert identity = the workflow file that emitted the signature,
+        # bound to a tag of the form v* (matches release.yml's `on.tags`).
+        cert_id_re="^https://github.com/${REPO}/.github/workflows/release.yml@refs/tags/v"
+        oidc_issuer="https://token.actions.githubusercontent.com"
+        log "verifying cosign keyless signature on SHA256SUMS"
+        if cosign verify-blob \
+            --bundle "$bundle_path" \
+            --certificate-identity-regexp "$cert_id_re" \
+            --certificate-oidc-issuer "$oidc_issuer" \
+            "$sums_path" >/dev/null 2>&1; then
+          log "cosign verified: SHA256SUMS signed by ${REPO}/.github/workflows/release.yml (sigstore keyless)"
+        else
+          err "cosign signature verification FAILED — refusing to install"
+          err "  bundle:   $bundle_url"
+          err "  identity: $cert_id_re"
+          err "  issuer:   $oidc_issuer"
+          exit 1
+        fi
+      else
+        warn "no cosign bundle in release (pre-signing release or CI didn't run)"
+        warn "  expected: $bundle_url — continuing on sha256-only trust"
+      fi
+    else
+      warn "cosign not on PATH — skipping signature verify (sha256 already verified)"
+      warn "  install cosign for full keyless verify: https://docs.sigstore.dev/cosign/installation/"
     fi
   else
     warn "SHA256SUMS not found in release — skipping checksum verify"

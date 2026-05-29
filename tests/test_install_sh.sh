@@ -158,6 +158,80 @@ case "$OS" in
     ;;
 esac
 
+# ---------- test 5: cosign warn-skip paths ----------
+# We never publish a SHA256SUMS.cosign.bundle in this mock server, so the
+# installer should always take the "no cosign bundle in release" warn-skip
+# path when cosign IS on PATH, and the "cosign not on PATH" warn-skip when
+# it is NOT. Either way the install succeeds. This guards against the
+# silent-abort regression: if cosign integration is wired wrong, install
+# would fail closed even though there's nothing to verify against.
+echo "test 5: cosign skip paths (release has no bundle)"
+# Reset the SHA256SUMS to a valid one (test 3 corrupted it)
+publish_release "v0.2.0" "$OS" "$ARCH"
+FAKE_HOME5="$TESTDIR/home5"
+mkdir -p "$FAKE_HOME5"
+
+# Path 5a: cosign NOT on PATH (default for the test runner box)
+set +e
+HOME="$FAKE_HOME5" PATH="$FAKE_HOME5/.local/bin:/usr/bin:/bin" bash "$PATCHED" > "$TESTDIR/t5a.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] && grep -q 'cosign not on PATH' "$TESTDIR/t5a.log"; then
+  ok "cosign-absent: install succeeds + emits warn-skip log"
+else
+  fail "5a: expected rc=0 + 'cosign not on PATH' warn, got rc=$RC — log:"
+  cat "$TESTDIR/t5a.log" | sed 's/^/    /'
+fi
+
+# Path 5b: cosign IS on PATH but bundle is 404 (mock server doesn't serve it).
+# Fake cosign that always succeeds. (If install.sh ever calls cosign in this
+# path it's a wiring bug, since bundle download should fail before verify.)
+FAKE_COSIGN_DIR="$TESTDIR/bin5b"; mkdir -p "$FAKE_COSIGN_DIR"
+cat > "$FAKE_COSIGN_DIR/cosign" <<'EOF'
+#!/usr/bin/env bash
+echo "fake-cosign should not be called when bundle is absent" >&2
+exit 0
+EOF
+chmod +x "$FAKE_COSIGN_DIR/cosign"
+FAKE_HOME5B="$TESTDIR/home5b"; mkdir -p "$FAKE_HOME5B"
+set +e
+HOME="$FAKE_HOME5B" PATH="$FAKE_COSIGN_DIR:$FAKE_HOME5B/.local/bin:/usr/bin:/bin" \
+  bash "$PATCHED" > "$TESTDIR/t5b.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] && grep -q 'no cosign bundle in release' "$TESTDIR/t5b.log"; then
+  ok "cosign-present + bundle-absent: install succeeds + warn-skip on missing bundle"
+else
+  fail "5b: expected rc=0 + 'no cosign bundle' warn, got rc=$RC — log:"
+  cat "$TESTDIR/t5b.log" | sed 's/^/    /'
+fi
+
+# ---------- test 6: cosign fails → abort ----------
+# Publish a fake bundle so the install.sh download succeeds, then make
+# cosign fail. Install must exit 1 with the abort message.
+echo "test 6: cosign verify fails → abort"
+echo "fake-bundle-bytes" > "$SERVER_ROOT/dl/SHA256SUMS.cosign.bundle"
+FAIL_COSIGN_DIR="$TESTDIR/bin6"; mkdir -p "$FAIL_COSIGN_DIR"
+cat > "$FAIL_COSIGN_DIR/cosign" <<'EOF'
+#!/usr/bin/env bash
+# Match the install.sh invocation arglist (verify-blob ...).
+echo "cosign: simulated bad signature" >&2
+exit 1
+EOF
+chmod +x "$FAIL_COSIGN_DIR/cosign"
+FAKE_HOME6="$TESTDIR/home6"; mkdir -p "$FAKE_HOME6"
+set +e
+HOME="$FAKE_HOME6" PATH="$FAIL_COSIGN_DIR:$FAKE_HOME6/.local/bin:/usr/bin:/bin" \
+  bash "$PATCHED" > "$TESTDIR/t6.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 1 ] && grep -q 'cosign signature verification FAILED' "$TESTDIR/t6.log"; then
+  ok "cosign verify fails → install aborts (rc=1) with explicit message"
+else
+  fail "6: expected rc=1 + 'cosign signature verification FAILED', got rc=$RC — log:"
+  cat "$TESTDIR/t6.log" | sed 's/^/    /'
+fi
+
 # ---------- summary ----------
 echo
 printf 'PASS=%s FAIL=%s\n' "$PASS" "$FAIL"

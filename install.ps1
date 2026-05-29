@@ -17,8 +17,13 @@
 #   1 failure
 #   2 already installed (skipped)
 #
-# TODO(v2): cosign / Windows Authenticode signature verification.
-#           For v1 we rely on SHA256 checksums + HTTPS to github.com.
+# Trust model:
+#   1. HTTPS to github.com (CA-anchored).
+#   2. SHA256 against SHA256SUMS published in the same release.
+#   3. (optional) cosign keyless verification of SHA256SUMS when cosign is
+#      on PATH AND the release contains SHA256SUMS.cosign.bundle. Missing
+#      bundle == warn-and-skip (so the installer works against releases
+#      that pre-date workflow signing). Failed verify == abort.
 
 $ErrorActionPreference = 'Stop'
 
@@ -178,6 +183,56 @@ function Invoke-Install {
         Cleanup; exit 1
       }
       Write-Log 'sha256 verified'
+    }
+
+    # Optional: cosign keyless verification of SHA256SUMS. We only attempt
+    # this when (a) cosign is on PATH and (b) the release ships a
+    # SHA256SUMS.cosign.bundle. If either is missing we warn-and-skip,
+    # since SHA256 over HTTPS is already a meaningful trust floor.
+    # If cosign IS present and the bundle exists but verify fails, we
+    # abort -- a failed signature is louder than a missing one.
+    if (Test-Command 'cosign') {
+      $bundleUrl  = "$baseUrl/SHA256SUMS.cosign.bundle"
+      $bundlePath = Join-Path $TmpDir 'SHA256SUMS.cosign.bundle'
+      $bundleOk = $true
+      try {
+        Invoke-WebRequest -UseBasicParsing -Uri $bundleUrl -OutFile $bundlePath -Headers @{ 'User-Agent' = 'unblock-install' } -ErrorAction Stop
+      } catch {
+        $bundleOk = $false
+      }
+      if ($bundleOk -and (Test-Path $bundlePath) -and ((Get-Item $bundlePath).Length -gt 0)) {
+        # Cert identity = the workflow file that emitted the signature,
+        # bound to a tag of the form v* (matches release.yml's on.tags).
+        $certIdRe   = "^https://github.com/$Repo/.github/workflows/release.yml@refs/tags/v"
+        $oidcIssuer = 'https://token.actions.githubusercontent.com'
+        Write-Log 'verifying cosign keyless signature on SHA256SUMS'
+        $verifyOk = $true
+        try {
+          & cosign verify-blob `
+            --bundle $bundlePath `
+            --certificate-identity-regexp $certIdRe `
+            --certificate-oidc-issuer $oidcIssuer `
+            $sumsPath *> $null
+          if ($LASTEXITCODE -ne 0) { $verifyOk = $false }
+        } catch {
+          $verifyOk = $false
+        }
+        if ($verifyOk) {
+          Write-Log "cosign verified: SHA256SUMS signed by $Repo/.github/workflows/release.yml (sigstore keyless)"
+        } else {
+          Write-Err 'cosign signature verification FAILED -- refusing to install'
+          Write-Err "  bundle:   $bundleUrl"
+          Write-Err "  identity: $certIdRe"
+          Write-Err "  issuer:   $oidcIssuer"
+          Cleanup; exit 1
+        }
+      } else {
+        Write-Warn 'no cosign bundle in release (pre-signing release or CI did not run)'
+        Write-Warn "  expected: $bundleUrl -- continuing on sha256-only trust"
+      }
+    } else {
+      Write-Warn 'cosign not on PATH -- skipping signature verify (sha256 already verified)'
+      Write-Warn '  install cosign for full keyless verify: https://docs.sigstore.dev/cosign/installation/'
     }
   }
 
