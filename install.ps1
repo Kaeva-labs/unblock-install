@@ -7,7 +7,7 @@
 #   1. Detect arch (x64/arm64)
 #   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
 #   3. Download latest release artifact from
-#      github.com/Viraj0518/unblock_cli/releases/latest
+#      github.com/Viraj0518/unblock-install/releases/latest
 #   4. Verify SHA256 against SHA256SUMS published alongside the release
 #   5. Install to $env:LOCALAPPDATA\unblock\unblock.exe, prepend to USER PATH
 #   6. Print onboarding hint
@@ -23,7 +23,7 @@
 $ErrorActionPreference = 'Stop'
 
 # ---------- config ----------
-$Repo        = 'Viraj0518/unblock_cli'
+$Repo        = 'Viraj0518/unblock-install'
 $BinName     = 'unblock.exe'
 $InstallDir  = if ($env:UNBLOCK_INSTALL_DIR) { $env:UNBLOCK_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'unblock' }
 $TmpDir      = Join-Path ([System.IO.Path]::GetTempPath()) ("unblock-install-" + [System.Guid]::NewGuid().ToString('N'))
@@ -164,7 +164,8 @@ function Invoke-Install {
     $expected = $null
     foreach ($line in Get-Content $sumsPath) {
       $parts = $line -split '\s+', 2
-      if ($parts.Count -eq 2 -and $parts[1].Trim() -eq $asset) {
+      # TrimStart('*') tolerates sha256sum binary-mode lines: "<hash> *name"
+      if ($parts.Count -eq 2 -and $parts[1].Trim().TrimStart('*') -eq $asset) {
         $expected = $parts[0].ToLower()
         break
       }

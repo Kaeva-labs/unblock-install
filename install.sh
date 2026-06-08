@@ -8,7 +8,7 @@
 #   1. Detect OS (linux/darwin) + arch (x64/arm64)
 #   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
 #   3. Download latest release artifact from
-#      github.com/Viraj0518/unblock_cli/releases/latest
+#      github.com/Viraj0518/unblock-install/releases/latest
 #   4. Verify sha256 against SHA256SUMS published alongside the release
 #   5. Install to $HOME/.local/bin/unblock (chmod +x, prepend to PATH in rc)
 #   6. Print onboarding hint
@@ -24,7 +24,7 @@
 set -eu
 
 # ---------- config ----------
-REPO="Viraj0518/unblock_cli"
+REPO="Viraj0518/unblock-install"
 INSTALL_DIR="${UNBLOCK_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_NAME="unblock"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t unblock-install)"
@@ -178,7 +178,9 @@ main() {
 
   log "downloading SHA256SUMS"
   if download "$sums_url" "$sums_path"; then
-    expected="$(grep -E "[[:space:]]${asset}\$" "$sums_path" | awk '{print $1}' | head -n1)"
+    # Match the asset whether listed as "<hash>  name" (text mode) or
+    # "<hash> *name" (sha256sum binary mode — the leading * must be tolerated).
+    expected="$(grep -E "[[:space:]][*]?${asset}\$" "$sums_path" | awk '{print $1}' | head -n1)"
     if [ -z "$expected" ]; then
       warn "no checksum entry for ${asset} in SHA256SUMS — skipping verify"
     else
