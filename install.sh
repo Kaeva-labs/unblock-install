@@ -178,7 +178,9 @@ main() {
 
   log "downloading SHA256SUMS"
   if download "$sums_url" "$sums_path"; then
-    expected="$(grep -E "[[:space:]]${asset}\$" "$sums_path" | awk '{print $1}' | head -n1)"
+    # Match the asset whether listed as "<hash>  name" (text mode) or
+    # "<hash> *name" (sha256sum binary mode — the leading * must be tolerated).
+    expected="$(grep -E "[[:space:]][*]?${asset}\$" "$sums_path" | awk '{print $1}' | head -n1)"
     if [ -z "$expected" ]; then
       warn "no checksum entry for ${asset} in SHA256SUMS — skipping verify"
     else

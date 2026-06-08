@@ -164,7 +164,8 @@ function Invoke-Install {
     $expected = $null
     foreach ($line in Get-Content $sumsPath) {
       $parts = $line -split '\s+', 2
-      if ($parts.Count -eq 2 -and $parts[1].Trim() -eq $asset) {
+      # TrimStart('*') tolerates sha256sum binary-mode lines: "<hash> *name"
+      if ($parts.Count -eq 2 -and $parts[1].Trim().TrimStart('*') -eq $asset) {
         $expected = $parts[0].ToLower()
         break
       }
