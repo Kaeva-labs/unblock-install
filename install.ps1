@@ -197,6 +197,9 @@ function Invoke-Install {
   Write-Host '    unblock spawn <bin> --as <name> --role member'
   Write-Host '  (or:'
   Write-Host '    unblock login <invite-code> --persona <name> )'
+  Write-Host ''
+  Write-Host '  This installer only places the binary -- your ~/.unblock data'
+  Write-Host '  (identity, comms, saved state) is untouched and safe to reinstall over.'
   Write-Host '------------------------------------------------------------'
   Cleanup
   exit 0
