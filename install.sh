@@ -212,6 +212,9 @@ main() {
     unblock spawn <bin> --as <name> --role member
   (or:
     unblock login <invite-code> --persona <name> )
+
+  This installer only places the binary — your ~/.unblock data
+  (identity, comms, saved state) is untouched and safe to reinstall over.
 ------------------------------------------------------------
 EOF
   exit 0

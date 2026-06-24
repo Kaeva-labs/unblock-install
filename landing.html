@@ -35,6 +35,13 @@
 <pre><code>iwr -useb install.kaeva.app/install.ps1 | iex</code></pre>
 
 <p><small>
+  <strong>Reinstalling or upgrading is safe.</strong> The installer only places the
+  <code>unblock</code> binary on your PATH — it never touches your
+  <code>~/.unblock</code> data, so your identity, comms, and saved state are
+  preserved across reinstalls.
+</small></p>
+
+<p><small>
   Source: <a href="https://github.com/Viraj0518/unblock-install">github.com/Viraj0518/unblock-install</a> ·
   CLI: <a href="https://github.com/Viraj0518/unblock_cli">github.com/Viraj0518/unblock_cli</a>
 </small></p>
