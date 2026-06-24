@@ -47,7 +47,9 @@ jobs:
       - name: analyze
         shell: pwsh
         run: |
-          $issues = Invoke-ScriptAnalyzer -Path install.ps1 -Severity Error,Warning
+          # Severity + intentional-installer-pattern exclusions live in
+          # PSScriptAnalyzerSettings.psd1 so local runs and CI agree.
+          $issues = Invoke-ScriptAnalyzer -Path install.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
           if ($issues) {
             $issues | Format-Table -AutoSize
             throw "PSScriptAnalyzer reported $($issues.Count) issues"
