@@ -24,7 +24,7 @@ Hosting source for **install.kaeva.app** — the one-liner installer for the [UN
 |------|----------|
 | 1 | Detect OS (`linux` / `darwin` / `windows`) and arch (`x64` / `arm64`). |
 | 2 | If `unblock` is already on PATH and its `--version` is ≥ the latest GitHub release, exit `2`. |
-| 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Viraj0518/unblock_cli`. |
+| 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of **this repo** (`Viraj0518/unblock-install` — `unblock_cli` went private; repointed in #5). |
 | 4 | SHA256-verify against `SHA256SUMS` published alongside the release. |
 | 5 | Install:<br>• Linux/macOS → `$HOME/.local/bin/unblock` (chmod +x; prepended to PATH via shell rc).<br>• Windows → `$env:LOCALAPPDATA\unblock\unblock.exe` (added to USER PATH via `[Environment]::SetEnvironmentVariable`). |
 | 6 | Print onboarding hint pointing the user at `unblock spawn` / `unblock login`. |
@@ -37,7 +37,7 @@ Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 .
 ├── install.sh                 POSIX bash installer (Linux + macOS)
 ├── install.ps1                PowerShell 5.1+ installer (Windows)
-├── index.html                 Human-facing landing page (served to browsers)
+├── landing.html               Human-facing landing page (served to browsers; not index.html — avoids CF Pages' /index.html → / canonicalization loop)
 ├── _redirects                 CF Pages explicit-path routing
 ├── functions/index.js         CF Pages Function — UA / Accept negotiation for `/`
 ├── tests/
@@ -52,10 +52,15 @@ Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 The installer expects assets named **`unblock-<os>-<arch>[.exe]`** plus a
 **`SHA256SUMS`** file in the same release.
 
-Recommended `gh` flow from `Viraj0518/unblock_cli`:
+Canonical build+publish machinery: `unblock_ci/release-runner/scripts/build-and-release.sh`
+(clones the polyrepo siblings, bundles, builds the pkg target matrix, smoke-gates, generates
+`SHA256SUMS`, and publishes). Releases land on **this repo** (`Viraj0518/unblock-install`),
+which is what the installer scripts resolve at runtime via `releases/latest`.
+
+Equivalent manual `gh` flow:
 
 ```sh
-# 1. Build native binaries (pkg, nexe, deno compile, etc.)
+# 1. Build native binaries (@yao-pkg/pkg via unblock_cli's "pkg" config)
 unblock-linux-x64
 unblock-linux-arm64
 unblock-darwin-x64
@@ -63,15 +68,16 @@ unblock-darwin-arm64
 unblock-windows-x64.exe
 unblock-windows-arm64.exe
 
-# 2. Generate SHA256SUMS
-sha256sum unblock-* > SHA256SUMS
+# 2. Generate SHA256SUMS (sorted, deterministic)
+sha256sum unblock-* | sort > SHA256SUMS
 
-# 3. Publish
+# 3. Publish to THIS repo
 gh release create v0.1.0 \
   unblock-linux-x64 unblock-linux-arm64 \
   unblock-darwin-x64 unblock-darwin-arm64 \
   unblock-windows-x64.exe unblock-windows-arm64.exe \
   SHA256SUMS \
+  --repo Viraj0518/unblock-install \
   --title "v0.1.0" --notes "..."
 ```
 
