@@ -146,8 +146,8 @@ function Invoke-Install {
     Invoke-WebRequest -UseBasicParsing -Uri $assetUrl -OutFile $assetPath -Headers @{ 'User-Agent' = 'unblock-install' }
   } catch {
     Write-Err "failed to download $assetUrl"
-    Write-Err 'no native binary release published yet?'
-    Write-Err "fallback: install via npm -- npm i -g @unblock/cli@$($remoteTag.TrimStart('v'))"
+    Write-Err "no windows-$arch binary in release $remoteTag."
+    Write-Err "see published assets: https://github.com/$Repo/releases/$remoteTag"
     Cleanup; exit 1
   }
 

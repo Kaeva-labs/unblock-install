@@ -171,8 +171,8 @@ main() {
   log "downloading ${asset_url}"
   if ! download "$asset_url" "$asset_path"; then
     err "failed to download ${asset_url}"
-    err "no native binary release published yet?"
-    err "fallback: install via npm — npm i -g @unblock/cli@${remote_tag#v}"
+    err "no ${os}-${arch} binary in release ${remote_tag}."
+    err "see published assets: https://github.com/${REPO}/releases/${remote_tag}"
     exit 1
   fi
 
