@@ -8,7 +8,11 @@
 #   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
 #   3. Download latest release artifact from
 #      github.com/Viraj0518/unblock-install/releases/latest
-#   4. Verify SHA256 against SHA256SUMS published alongside the release
+#   4. Verify SHA256 against SHA256SUMS published alongside the release.
+#      Verification is MANDATORY (fail-closed): a missing SHA256SUMS, a missing
+#      entry for this asset, or a mismatch aborts the install with a nonzero
+#      exit. Set $env:UNBLOCK_INSECURE_SKIP_CHECKSUM=1 to override the "cannot
+#      verify" cases at your own risk (a genuine mismatch is never overridable).
 #   5. Install to $env:LOCALAPPDATA\unblock\unblock.exe, prepend to USER PATH
 #   6. Print onboarding hint
 #
@@ -152,15 +156,22 @@ function Invoke-Install {
   }
 
   Write-Log 'downloading SHA256SUMS'
+  # Integrity verification is FAIL-CLOSED: if a checksum cannot be obtained AND
+  # matched, refuse to install. The only escape hatch is the explicit
+  # UNBLOCK_INSECURE_SKIP_CHECKSUM=1 opt-out. A genuine hash mismatch is always
+  # fatal and is never overridable -- it signals tampering, not absence.
+  $verified = $false
+  $verifyFailure = $null
   $sumsOk = $true
   try {
     Invoke-WebRequest -UseBasicParsing -Uri $sumsUrl -OutFile $sumsPath -Headers @{ 'User-Agent' = 'unblock-install' }
   } catch {
-    Write-Warn 'SHA256SUMS not found in release -- skipping checksum verify'
     $sumsOk = $false
   }
 
-  if ($sumsOk) {
+  if (-not $sumsOk) {
+    $verifyFailure = "failed to download SHA256SUMS from $sumsUrl"
+  } else {
     $expected = $null
     foreach ($line in Get-Content $sumsPath) {
       $parts = $line -split '\s+', 2
@@ -171,7 +182,7 @@ function Invoke-Install {
       }
     }
     if (-not $expected) {
-      Write-Warn "no checksum entry for $asset in SHA256SUMS -- skipping verify"
+      $verifyFailure = "no checksum entry for $asset in SHA256SUMS (never expected for a well-formed release)"
     } else {
       $actual = Get-Sha256 -Path $assetPath
       if ($expected -ne $actual) {
@@ -179,6 +190,18 @@ function Invoke-Install {
         Cleanup; exit 1
       }
       Write-Log 'sha256 verified'
+      $verified = $true
+    }
+  }
+
+  if (-not $verified) {
+    Write-Err $verifyFailure
+    if ($env:UNBLOCK_INSECURE_SKIP_CHECKSUM -eq '1') {
+      Write-Warn 'UNBLOCK_INSECURE_SKIP_CHECKSUM=1 set -- proceeding WITHOUT checksum verification (INSECURE)'
+    } else {
+      Write-Err 'refusing to install an unverified binary (checksum could not be obtained and matched).'
+      Write-Err 'to override at your own risk, re-run with: $env:UNBLOCK_INSECURE_SKIP_CHECKSUM=1'
+      Cleanup; exit 1
     }
   }
 

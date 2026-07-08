@@ -170,6 +170,72 @@ try {
     Write-Host $log
   }
 
+  # ---------- test 3: SHA256SUMS present but NO entry for this asset (fail-closed) ----------
+  # Regression guard for the fail-open checksum finding (install.ps1:154-183).
+  Write-Host 'test 3: sums present, no entry for asset -> fail closed'
+  [void](Publish-Release -Tag 'v0.2.0' -Arch $arch)
+  Set-Content -Path (Join-Path $DlDir 'SHA256SUMS') -Value "0000000000000000000000000000000000000000000000000000000000000000  some-other-release-artifact.txt" -Encoding ASCII
+  $home3 = Join-Path $TestDir 'home3'
+  New-Item -ItemType Directory -Force $home3 | Out-Null
+  $env:LOCALAPPDATA = Join-Path $home3 'AppData\Local'
+  $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
+  $env:UNBLOCK_INSECURE_SKIP_CHECKSUM = $null
+  try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $patched *> (Join-Path $TestDir 't3.log')
+    $rc = $LASTEXITCODE
+  } catch { $rc = 99 }
+  $installed3 = Join-Path $env:UNBLOCK_INSTALL_DIR 'unblock.exe'
+  if ($rc -eq 1 -and -not (Test-Path $installed3)) {
+    Ok 'no-entry SHA256SUMS aborts (rc=1) and does not install'
+  } else {
+    Bad "expected rc=1 + no binary, got rc=$rc, exists=$(Test-Path $installed3)"
+    Get-Content (Join-Path $TestDir 't3.log') | ForEach-Object { Write-Host "    $_" }
+  }
+
+  # ---------- test 4: SHA256SUMS missing / 404 (fail-closed) ----------
+  Write-Host 'test 4: sums 404 -> fail closed'
+  [void](Publish-Release -Tag 'v0.2.0' -Arch $arch)
+  Remove-Item -Force (Join-Path $DlDir 'SHA256SUMS') -ErrorAction SilentlyContinue
+  $home4 = Join-Path $TestDir 'home4'
+  New-Item -ItemType Directory -Force $home4 | Out-Null
+  $env:LOCALAPPDATA = Join-Path $home4 'AppData\Local'
+  $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
+  $env:UNBLOCK_INSECURE_SKIP_CHECKSUM = $null
+  try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $patched *> (Join-Path $TestDir 't4.log')
+    $rc = $LASTEXITCODE
+  } catch { $rc = 99 }
+  $installed4 = Join-Path $env:UNBLOCK_INSTALL_DIR 'unblock.exe'
+  if ($rc -eq 1 -and -not (Test-Path $installed4)) {
+    Ok 'missing SHA256SUMS aborts (rc=1) and does not install'
+  } else {
+    Bad "expected rc=1 + no binary, got rc=$rc, exists=$(Test-Path $installed4)"
+    Get-Content (Join-Path $TestDir 't4.log') | ForEach-Object { Write-Host "    $_" }
+  }
+
+  # ---------- test 5: explicit insecure opt-out installs despite missing sums ----------
+  Write-Host 'test 5: UNBLOCK_INSECURE_SKIP_CHECKSUM=1 override -> installs with warning'
+  [void](Publish-Release -Tag 'v0.2.0' -Arch $arch)
+  Remove-Item -Force (Join-Path $DlDir 'SHA256SUMS') -ErrorAction SilentlyContinue
+  $home5 = Join-Path $TestDir 'home5'
+  New-Item -ItemType Directory -Force $home5 | Out-Null
+  $env:LOCALAPPDATA = Join-Path $home5 'AppData\Local'
+  $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
+  $env:UNBLOCK_INSECURE_SKIP_CHECKSUM = '1'
+  try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $patched *> (Join-Path $TestDir 't5.log')
+    $rc = $LASTEXITCODE
+  } catch { $rc = 99 }
+  $env:UNBLOCK_INSECURE_SKIP_CHECKSUM = $null
+  $installed5 = Join-Path $env:UNBLOCK_INSTALL_DIR 'unblock.exe'
+  $log5 = Get-Content (Join-Path $TestDir 't5.log') -Raw
+  if ($rc -eq 0 -and (Test-Path $installed5) -and $log5 -match 'INSECURE') {
+    Ok 'explicit opt-out installs (rc=0) with INSECURE warning'
+  } else {
+    Bad "expected rc=0 + binary + INSECURE warning, got rc=$rc, exists=$(Test-Path $installed5)"
+    Write-Host $log5
+  }
+
   Write-Host ''
   Write-Host "PASS=$Pass FAIL=$Fail"
   if ($Fail -gt 0) { exit 1 } else { exit 0 }

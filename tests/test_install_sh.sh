@@ -158,6 +158,68 @@ case "$OS" in
     ;;
 esac
 
+# ---------- test 5: SHA256SUMS present but NO entry for this asset (fail-closed) ----------
+# Regression guard for the fail-open checksum finding (install.sh:180-196):
+# a well-formed SHA256SUMS that simply has no line for the requested asset must
+# be a HARD error, not a "skipping verify" warn-then-install.
+echo "test 5: sums present, no entry for asset -> fail closed"
+make_fake_bin "v0.2.0" "$SERVER_ROOT/dl/unblock-${OS}-${ARCH}"
+printf '%s  %s\n' \
+  "0000000000000000000000000000000000000000000000000000000000000000" \
+  "some-other-release-artifact.txt" > "$SERVER_ROOT/dl/SHA256SUMS"
+FAKE_HOME5="$TESTDIR/home5"
+mkdir -p "$FAKE_HOME5"
+set +e
+HOME="$FAKE_HOME5" PATH="$FAKE_HOME5/.local/bin:/usr/bin:/bin" bash "$PATCHED" > "$TESTDIR/t5.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 1 ] && [ ! -e "$FAKE_HOME5/.local/bin/unblock" ]; then
+  ok "no-entry SHA256SUMS aborts (rc=1) and does not install"
+else
+  fail "expected rc=1 + no binary, got rc=$RC, binary=$( [ -e "$FAKE_HOME5/.local/bin/unblock" ] && echo yes || echo no ) — log:"
+  sed 's/^/    /' "$TESTDIR/t5.log"
+fi
+
+# ---------- test 6: SHA256SUMS missing / unfetchable (fail-closed) ----------
+# If the sums object 404s (or a CDN/edge suppresses just it), the installer must
+# abort rather than install an unverified binary.
+echo "test 6: sums 404 -> fail closed"
+make_fake_bin "v0.2.0" "$SERVER_ROOT/dl/unblock-${OS}-${ARCH}"
+rm -f "$SERVER_ROOT/dl/SHA256SUMS"
+FAKE_HOME6="$TESTDIR/home6"
+mkdir -p "$FAKE_HOME6"
+set +e
+HOME="$FAKE_HOME6" PATH="$FAKE_HOME6/.local/bin:/usr/bin:/bin" bash "$PATCHED" > "$TESTDIR/t6.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 1 ] && [ ! -e "$FAKE_HOME6/.local/bin/unblock" ]; then
+  ok "missing SHA256SUMS aborts (rc=1) and does not install"
+else
+  fail "expected rc=1 + no binary, got rc=$RC, binary=$( [ -e "$FAKE_HOME6/.local/bin/unblock" ] && echo yes || echo no ) — log:"
+  sed 's/^/    /' "$TESTDIR/t6.log"
+fi
+
+# ---------- test 7: explicit insecure opt-out proceeds despite missing sums ----------
+# The escape hatch must exist so the fail-closed default never bricks a
+# deliberate, acknowledged install. Requires an explicit env var AND emits a
+# loud INSECURE warning.
+echo "test 7: UNBLOCK_INSECURE_SKIP_CHECKSUM=1 override -> installs with warning"
+make_fake_bin "v0.2.0" "$SERVER_ROOT/dl/unblock-${OS}-${ARCH}"
+rm -f "$SERVER_ROOT/dl/SHA256SUMS"
+FAKE_HOME7="$TESTDIR/home7"
+mkdir -p "$FAKE_HOME7"
+set +e
+HOME="$FAKE_HOME7" PATH="$FAKE_HOME7/.local/bin:/usr/bin:/bin" UNBLOCK_INSECURE_SKIP_CHECKSUM=1 \
+  bash "$PATCHED" > "$TESTDIR/t7.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] && [ -x "$FAKE_HOME7/.local/bin/unblock" ] && grep -qi 'INSECURE' "$TESTDIR/t7.log"; then
+  ok "explicit opt-out installs (rc=0) with INSECURE warning"
+else
+  fail "expected rc=0 + binary + INSECURE warning, got rc=$RC, binary=$( [ -x "$FAKE_HOME7/.local/bin/unblock" ] && echo yes || echo no ) — log:"
+  sed 's/^/    /' "$TESTDIR/t7.log"
+fi
+
 # ---------- summary ----------
 echo
 printf 'PASS=%s FAIL=%s\n' "$PASS" "$FAIL"

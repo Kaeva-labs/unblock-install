@@ -9,7 +9,11 @@
 #   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
 #   3. Download latest release artifact from
 #      github.com/Viraj0518/unblock-install/releases/latest
-#   4. Verify sha256 against SHA256SUMS published alongside the release
+#   4. Verify sha256 against SHA256SUMS published alongside the release.
+#      Verification is MANDATORY (fail-closed): a missing SHA256SUMS, a missing
+#      entry for this asset, or a mismatch aborts the install with a nonzero
+#      exit. Set UNBLOCK_INSECURE_SKIP_CHECKSUM=1 to override the "cannot verify"
+#      cases at your own risk (a genuine mismatch is never overridable).
 #   5. Install to $HOME/.local/bin/unblock (chmod +x, prepend to PATH in rc)
 #   6. Print onboarding hint
 #
@@ -177,12 +181,18 @@ main() {
   fi
 
   log "downloading SHA256SUMS"
+  # Integrity verification is FAIL-CLOSED: if a checksum cannot be obtained AND
+  # matched, refuse to install. The only escape hatch is the explicit
+  # UNBLOCK_INSECURE_SKIP_CHECKSUM=1 opt-out. A genuine hash *mismatch* is always
+  # fatal and is never overridable — it signals tampering, not absence.
+  verified=0
+  verify_failure=""
   if download "$sums_url" "$sums_path"; then
     # Match the asset whether listed as "<hash>  name" (text mode) or
     # "<hash> *name" (sha256sum binary mode — the leading * must be tolerated).
     expected="$(grep -E "[[:space:]][*]?${asset}\$" "$sums_path" | awk '{print $1}' | head -n1)"
     if [ -z "$expected" ]; then
-      warn "no checksum entry for ${asset} in SHA256SUMS — skipping verify"
+      verify_failure="no checksum entry for ${asset} in SHA256SUMS (never expected for a well-formed release)"
     else
       actual="$(sha256 "$asset_path")"
       if [ "$expected" != "$actual" ]; then
@@ -190,9 +200,21 @@ main() {
         exit 1
       fi
       log "sha256 verified"
+      verified=1
     fi
   else
-    warn "SHA256SUMS not found in release — skipping checksum verify"
+    verify_failure="failed to download SHA256SUMS from ${sums_url}"
+  fi
+
+  if [ "$verified" -ne 1 ]; then
+    err "$verify_failure"
+    if [ "${UNBLOCK_INSECURE_SKIP_CHECKSUM:-}" = "1" ]; then
+      warn "UNBLOCK_INSECURE_SKIP_CHECKSUM=1 set — proceeding WITHOUT checksum verification (INSECURE)"
+    else
+      err "refusing to install an unverified binary (checksum could not be obtained and matched)."
+      err "to override at your own risk, re-run with: UNBLOCK_INSECURE_SKIP_CHECKSUM=1"
+      exit 1
+    fi
   fi
 
   mkdir -p "$INSTALL_DIR"
