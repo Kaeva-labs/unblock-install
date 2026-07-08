@@ -50,9 +50,11 @@ DL_CMD="$(require_one curl wget)"
 download() {
   url="$1"; out="$2"
   if [ "$DL_CMD" = "curl" ]; then
-    curl -fsSL --retry 3 --retry-delay 1 -o "$out" "$url"
+    # --connect-timeout/--max-time: a stalled GitHub connection must not
+    # freeze the piped `curl | sh` one-liner forever with no feedback.
+    curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-delay 1 -o "$out" "$url"
   else
-    wget -q --tries=3 -O "$out" "$url"
+    wget -q --timeout=30 --tries=3 -O "$out" "$url"
   fi
 }
 
@@ -91,6 +93,16 @@ fetch_latest_tag() {
     err "failed to fetch latest release metadata from ${api_url}"
     exit 1
   fi
+  # Unauthenticated api.github.com calls are rate-limited to 60 req/hr/IP.
+  # Behind a shared corporate NAT or CI egress IP that limit gets hit
+  # intermittently -- detect it and say so plainly, instead of the
+  # misleading generic "could not parse tag_name" below.
+  if grep -qi 'API rate limit exceeded' "$tag_file" 2>/dev/null; then
+    err "GitHub API rate limit exceeded for this network's IP (60 req/hr, unauthenticated)."
+    err "This is usually transient on shared/corporate NAT or CI egress IPs -- wait a bit and retry."
+    err "You can also download a release directly: https://github.com/${REPO}/releases/latest"
+    exit 1
+  fi
   # Parse "tag_name": "v0.1.0" — no jq dependency
   tag="$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$tag_file" \
         | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
@@ -117,7 +129,11 @@ ver_ge() {
 check_already_installed() {
   remote_tag="$1"
   if ! have "$BIN_NAME"; then return 1; fi
-  cur="$($BIN_NAME --version 2>/dev/null | head -n1 | awk '{print $NF}' || echo "")"
+  # Extract a semver token rather than assuming it's the last whitespace
+  # field -- output like "unblock 0.2.0 (build abc123)" would otherwise
+  # parse as "abc123)" and break idempotency (ver_ge never matches, so the
+  # installer re-downloads and reinstalls on every single run).
+  cur="$($BIN_NAME --version 2>/dev/null | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || echo "")"
   [ -z "$cur" ] && return 1
   if ver_ge "$cur" "$remote_tag"; then
     log "already installed: ${BIN_NAME} ${cur} (>= remote ${remote_tag})"
@@ -134,13 +150,28 @@ add_to_path_rc() {
     *":$bindir:"*) return 0 ;;
   esac
   line="export PATH=\"$bindir:\$PATH\""
+  found_rc=0
   for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
     [ -f "$rc" ] || continue
+    found_rc=1
     if ! grep -qsF "$line" "$rc" 2>/dev/null; then
       printf '\n# added by unblock-install\n%s\n' "$line" >> "$rc"
       log "added $bindir to PATH in $rc"
     fi
   done
+  if [ "$found_rc" -eq 0 ]; then
+    # Fresh account (e.g. default-zsh macOS before ~/.zshrc is ever
+    # created) or a minimal container/CI image: none of the usual rc files
+    # exist, so the loop above is a silent no-op and `unblock` would be
+    # "command not found" forever. Create a login-shell rc so PATH is
+    # actually picked up next session.
+    case "${SHELL:-}" in
+      */zsh) target_rc="$HOME/.zprofile" ;;
+      *)     target_rc="$HOME/.profile" ;;
+    esac
+    printf '\n# added by unblock-install\n%s\n' "$line" >> "$target_rc"
+    log "created $target_rc and added $bindir to PATH"
+  fi
   warn "open a new shell or run: export PATH=\"$bindir:\$PATH\""
 }
 

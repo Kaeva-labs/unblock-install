@@ -41,6 +41,43 @@ function Cleanup { if (Test-Path $TmpDir) { Remove-Item -Recurse -Force -Path $T
 
 function Test-Command { param([string]$Name) [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 
+# PS 5.1's Invoke-RestMethod/Invoke-WebRequest have no -MaximumRetryCount, so
+# retry manually. Also gives every network call a bounded timeout instead of
+# hanging forever on a stalled connection.
+function Invoke-WithRetry {
+  param(
+    [Parameter(Mandatory)][scriptblock]$Action,
+    [int]$MaxAttempts = 3,
+    [int]$DelaySeconds = 2,
+    [string]$What = 'request',
+    # Optional predicate run against the caught error; return $false to stop
+    # retrying immediately (e.g. a confirmed rate-limit -- more attempts
+    # can't succeed and just waste time).
+    [scriptblock]$ShouldRetry = { $true }
+  )
+  for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+    try {
+      return & $Action
+    } catch {
+      $err = $_
+      if ($attempt -ge $MaxAttempts -or -not (& $ShouldRetry $err)) { throw $err }
+      Write-Warn "$What failed (attempt $attempt/$MaxAttempts) -- retrying in ${DelaySeconds}s"
+      Start-Sleep -Seconds $DelaySeconds
+    }
+  }
+}
+
+# Best-effort classification of "was this failure a GitHub API rate limit?"
+# so callers can fail fast (retrying a confirmed rate limit can't succeed)
+# and print an actionable message instead of a generic one.
+function Test-RateLimitError {
+  param($ErrorRecord)
+  $statusCode = $null
+  try { $statusCode = [int]$ErrorRecord.Exception.Response.StatusCode } catch {}
+  $bodyText = "$($ErrorRecord.ErrorDetails.Message) $($ErrorRecord.Exception.Message)"
+  return ($statusCode -eq 403 -or $bodyText -match 'rate limit')
+}
+
 function Get-Arch {
   $a = $env:PROCESSOR_ARCHITECTURE
   if ($env:PROCESSOR_ARCHITEW6432) { $a = $env:PROCESSOR_ARCHITEW6432 }
@@ -71,9 +108,21 @@ function Get-LatestTag {
   $url = "https://api.github.com/repos/$Repo/releases/latest"
   Write-Log "fetching $url"
   try {
-    $json = Invoke-RestMethod -Uri $url -UseBasicParsing -Headers @{ 'User-Agent' = 'unblock-install' }
+    # api.github.com is rate-limited to 60 unauthenticated req/hr/IP. Behind a
+    # shared corporate NAT or CI egress IP that limit gets hit intermittently.
+    # Don't burn retries on a *confirmed* rate limit (more attempts can't
+    # succeed) -- fail fast with an actionable message instead.
+    $json = Invoke-WithRetry -What 'fetch latest release metadata' -ShouldRetry { param($e) -not (Test-RateLimitError $e) } -Action {
+      Invoke-RestMethod -Uri $url -UseBasicParsing -TimeoutSec 120 -Headers @{ 'User-Agent' = 'unblock-install' }
+    }
   } catch {
-    Write-Err "failed to fetch latest release metadata: $_"
+    if (Test-RateLimitError $_) {
+      Write-Err "GitHub API rate limit exceeded for this network's IP (60 req/hr, unauthenticated)."
+      Write-Err 'This is usually transient on shared/corporate NAT or CI egress IPs -- wait a bit and retry.'
+      Write-Err "You can also download a release directly: https://github.com/$Repo/releases/latest"
+    } else {
+      Write-Err "failed to fetch latest release metadata: $_"
+    }
     Cleanup; exit 1
   }
   if (-not $json.tag_name) {
@@ -87,7 +136,14 @@ function Test-AlreadyInstalled {
   param([string]$RemoteTag)
   if (-not (Test-Command 'unblock')) { return $false }
   $cur = $null
-  try { $cur = (& unblock --version 2>$null | Select-Object -First 1).Split(' ')[-1] } catch {}
+  try {
+    # Extract a semver token rather than assuming it's the last whitespace
+    # field -- output like "unblock 0.2.0 (build abc123)" would otherwise
+    # parse as "abc123)" and break idempotency (never matches, so the
+    # installer re-downloads and reinstalls on every run).
+    $verLine = (& unblock --version 2>$null | Select-Object -First 1)
+    if ($verLine -match '\d+\.\d+\.\d+') { $cur = $Matches[0] }
+  } catch {}
   if ([string]::IsNullOrWhiteSpace($cur)) { return $false }
   $cmp = Compare-Versions -a $cur -b $RemoteTag
   if ($cmp -ge 0) {
@@ -100,18 +156,57 @@ function Test-AlreadyInstalled {
 
 function Add-ToUserPath {
   param([string]$Dir)
-  $cur = [Environment]::GetEnvironmentVariable('Path','User')
-  if ([string]::IsNullOrEmpty($cur)) { $cur = '' }
-  $parts = $cur.Split(';') | Where-Object { $_ -ne '' }
-  if ($parts -contains $Dir) {
-    Write-Log "$Dir already in USER PATH"
-    return
+
+  # [Environment]::GetEnvironmentVariable('Path','User') returns the
+  # *expanded* string of a REG_EXPAND_SZ PATH, and SetEnvironmentVariable
+  # writes it back as a static REG_SZ -- permanently freezing any dynamic
+  # entries (e.g. %USERPROFILE%\bin, %JAVA_HOME%\bin) to their current
+  # expansion. Read/write the raw registry value instead, preserving
+  # whatever value kind (String vs ExpandString) it already had.
+  $done = $false
+  try {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+    if ($key) {
+      try {
+        $opts = [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+        $curRaw = $key.GetValue('Path', '', $opts)
+        if ($null -eq $curRaw) { $curRaw = '' }
+        $kind = try { $key.GetValueKind('Path') } catch { [Microsoft.Win32.RegistryValueKind]::String }
+        $parts = $curRaw.Split(';') | Where-Object { $_ -ne '' }
+        if ($parts -contains $Dir) {
+          Write-Log "$Dir already in USER PATH"
+        } else {
+          $newRaw = if ($curRaw) { "$Dir;$curRaw" } else { $Dir }
+          $key.SetValue('Path', $newRaw, $kind)
+          Write-Log "added $Dir to USER PATH (open a new shell for it to take effect globally)"
+        }
+        $done = $true
+      } finally {
+        $key.Close()
+      }
+    }
+  } catch {
+    $done = $false
   }
-  $new = if ($cur) { "$Dir;$cur" } else { $Dir }
-  [Environment]::SetEnvironmentVariable('Path', $new, 'User')
+
+  if (-not $done) {
+    # Fallback (e.g. registry access unavailable for some reason): same
+    # behavior as before -- does not preserve %VAR% expansion, but still
+    # gets the directory onto PATH rather than failing the install.
+    $cur = [Environment]::GetEnvironmentVariable('Path','User')
+    if ([string]::IsNullOrEmpty($cur)) { $cur = '' }
+    $parts = $cur.Split(';') | Where-Object { $_ -ne '' }
+    if ($parts -contains $Dir) {
+      Write-Log "$Dir already in USER PATH"
+    } else {
+      $new = if ($cur) { "$Dir;$cur" } else { $Dir }
+      [Environment]::SetEnvironmentVariable('Path', $new, 'User')
+      Write-Log "added $Dir to USER PATH (open a new shell for it to take effect globally)"
+    }
+  }
+
   # Also patch current session
   $env:Path = "$Dir;$env:Path"
-  Write-Log "added $Dir to USER PATH (open a new shell for it to take effect globally)"
 }
 
 function Get-Sha256 {
@@ -143,7 +238,9 @@ function Invoke-Install {
 
   Write-Log "downloading $assetUrl"
   try {
-    Invoke-WebRequest -UseBasicParsing -Uri $assetUrl -OutFile $assetPath -Headers @{ 'User-Agent' = 'unblock-install' }
+    Invoke-WithRetry -What "download $asset" -Action {
+      Invoke-WebRequest -UseBasicParsing -Uri $assetUrl -OutFile $assetPath -TimeoutSec 120 -Headers @{ 'User-Agent' = 'unblock-install' }
+    } | Out-Null
   } catch {
     Write-Err "failed to download $assetUrl"
     Write-Err "no windows-$arch binary in release $remoteTag."
@@ -154,7 +251,9 @@ function Invoke-Install {
   Write-Log 'downloading SHA256SUMS'
   $sumsOk = $true
   try {
-    Invoke-WebRequest -UseBasicParsing -Uri $sumsUrl -OutFile $sumsPath -Headers @{ 'User-Agent' = 'unblock-install' }
+    Invoke-WithRetry -What 'download SHA256SUMS' -Action {
+      Invoke-WebRequest -UseBasicParsing -Uri $sumsUrl -OutFile $sumsPath -TimeoutSec 120 -Headers @{ 'User-Agent' = 'unblock-install' }
+    } | Out-Null
   } catch {
     Write-Warn 'SHA256SUMS not found in release -- skipping checksum verify'
     $sumsOk = $false
@@ -184,7 +283,25 @@ function Invoke-Install {
 
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
   $installPath = Join-Path $InstallDir $BinName
+  $oldPath = "$installPath.old"
+
+  # Windows locks a running executable, so Move-Item -Force straight onto an
+  # in-use unblock.exe throws a sharing violation (likely here, since the
+  # onboarding hint tells users to `unblock spawn` long-running agents).
+  # Rename-then-replace instead: renaming an in-use exe IS allowed on
+  # Windows even though overwriting/deleting it isn't.
+  if (Test-Path $installPath) {
+    if (Test-Path $oldPath) { Remove-Item -Force $oldPath -ErrorAction SilentlyContinue }
+    try {
+      Move-Item -Force -Path $installPath -Destination $oldPath -ErrorAction Stop
+    } catch {
+      Write-Err "could not replace the existing install at $installPath -- it looks like it's in use."
+      Write-Err 'close any running unblock processes (e.g. unblock spawn agents) and re-run the installer.'
+      Cleanup; exit 1
+    }
+  }
   Move-Item -Force -Path $assetPath -Destination $installPath
+  Remove-Item -Force $oldPath -ErrorAction SilentlyContinue
   Write-Log "installed to $installPath"
 
   Add-ToUserPath -Dir $InstallDir

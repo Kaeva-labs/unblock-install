@@ -32,12 +32,28 @@ export async function onRequest(context) {
   const assetReq = new Request(new URL(target, url), request);
   const resp = await env.ASSETS.fetch(assetReq);
 
+  if (!resp.ok) {
+    // Don't mask a failed upstream fetch as a 200. `curl | sh` / `iwr | iex`
+    // pipes the response body straight into a shell/PowerShell -- if a
+    // missing/broken asset were re-wrapped as status 200 here, an error
+    // page would get executed as if it were the installer. Propagate the
+    // real status (and let it fall out of the success cache/content-type
+    // path below) instead.
+    return resp;
+  }
+
   // Re-wrap so we control headers cleanly
   return new Response(resp.body, {
     status: 200,
     headers: {
       'Content-Type': contentType,
       'Cache-Control': 'public, max-age=300',
+      // The body returned here depends on the Accept/User-Agent request
+      // headers (install.sh vs install.ps1 vs landing.html). Without Vary,
+      // a shared/intermediary cache keyed only on URL could store one
+      // variant and serve it to a different client -- e.g. hand a cached
+      // shell script to a browser, or HTML to a curl-to-sh pipe.
+      'Vary': 'Accept, User-Agent',
       'X-Served-By': 'unblock-install/functions/index.js',
     },
   });

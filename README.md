@@ -41,9 +41,9 @@ Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 ├── _redirects                 CF Pages explicit-path routing
 ├── functions/index.js         CF Pages Function — UA / Accept negotiation for `/`
 ├── tests/
-│   ├── test_install_sh.sh     bash integration tests (mock GH release)
-│   └── Test-InstallPs1.ps1    PowerShell integration tests (mock GH release)
-├── .github/workflows/test.yml shellcheck + PSScriptAnalyzer + integration tests
+│   ├── test_install_sh.sh      bash integration tests (mock GH release)
+│   ├── Test-InstallPs1.ps1     PowerShell integration tests (mock GH release)
+│   └── test_functions_index.mjs  Node unit tests for functions/index.js
 └── README.md
 ```
 
@@ -118,12 +118,19 @@ This repo is wired to **`install.kaeva.app`** via Cloudflare Pages:
 
 ## Local testing
 
+There is currently no automated CI wired to this repo (the GitHub Actions
+workflow was removed — see `chore(ci): remove dead GitHub Actions workflows`
+in the git history) — run the suites below locally before pushing:
+
 ```sh
 # bash installer
 bash tests/test_install_sh.sh
 
 # PowerShell installer
 pwsh -File tests/Test-InstallPs1.ps1
+
+# Cloudflare Pages Function (content negotiation)
+node tests/test_functions_index.mjs
 ```
 
 ## License
