@@ -114,7 +114,6 @@ This repo is wired to **`install.kaeva.app`** via Cloudflare Pages:
 2. Build command: *(none — static)*. Output directory: `/`.
 3. **Custom domains** → add `install.kaeva.app` (CNAME to `<project>.pages.dev`, orange-cloud proxied for auto-cert).
 4. The Pages Function at `functions/index.js` handles UA-based content negotiation for `/`.
-5. (Optional, post-YC) Add `install.unblock.app` as a transitional-alias custom domain so the legacy URL keeps resolving during rebrand.
 
 ## Local testing
 
