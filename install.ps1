@@ -194,9 +194,9 @@ function Invoke-Install {
   Write-Host "  unblock $remoteTag installed."
   Write-Host ''
   Write-Host '  Now run:'
-  Write-Host '    unblock spawn <bin> --as <name> --role member'
-  Write-Host '  (or:'
-  Write-Host '    unblock login <invite-code> --persona <name> )'
+  Write-Host '    unblock login          # sign in -- or create your account'
+  Write-Host '  then:'
+  Write-Host '    unblock initialize     # connect to your org-brain'
   Write-Host ''
   Write-Host '  This installer only places the binary -- your ~/.unblock data'
   Write-Host '  (identity, comms, saved state) is untouched and safe to reinstall over.'

@@ -27,7 +27,7 @@ Hosting source for **install.kaeva.app** — the one-liner installer for the [UN
 | 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Viraj0518/unblock_cli`. |
 | 4 | SHA256-verify against `SHA256SUMS` published alongside the release. |
 | 5 | Install:<br>• Linux/macOS → `$HOME/.local/bin/unblock` (chmod +x; prepended to PATH via shell rc).<br>• Windows → `$env:LOCALAPPDATA\unblock\unblock.exe` (added to USER PATH via `[Environment]::SetEnvironmentVariable`). |
-| 6 | Print onboarding hint pointing the user at `unblock spawn` / `unblock login`. |
+| 6 | Print onboarding hint pointing the user at `unblock login` / `unblock initialize`. |
 
 Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 

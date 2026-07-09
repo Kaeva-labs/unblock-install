@@ -209,9 +209,9 @@ main() {
   unblock ${remote_tag} installed.
 
   Now run:
-    unblock spawn <bin> --as <name> --role member
-  (or:
-    unblock login <invite-code> --persona <name> )
+    unblock login          # sign in -- or create your account
+  then:
+    unblock initialize     # connect to your org-brain
 
   This installer only places the binary — your ~/.unblock data
   (identity, comms, saved state) is untouched and safe to reinstall over.
