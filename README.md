@@ -1,6 +1,6 @@
 # unblock-install
 
-Hosting source for **install.kaeva.app** — the one-liner installer for the [UNBLOCK CLI](https://github.com/Viraj0518/unblock_cli).
+Hosting source for **install.kaeva.app** — the one-liner installer for the [UNBLOCK CLI](https://github.com/Viraj0518/unblock-install/releases/latest).
 
 ## Usage
 
@@ -24,7 +24,7 @@ Hosting source for **install.kaeva.app** — the one-liner installer for the [UN
 |------|----------|
 | 1 | Detect OS (`linux` / `darwin` / `windows`) and arch (`x64` / `arm64`). |
 | 2 | If `unblock` is already on PATH and its `--version` is ≥ the latest GitHub release, exit `2`. |
-| 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Viraj0518/unblock_cli`. |
+| 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Viraj0518/unblock-install`. |
 | 4 | SHA256-verify against `SHA256SUMS` published alongside the release. |
 | 5 | Install:<br>• Linux/macOS → `$HOME/.local/bin/unblock` (chmod +x; prepended to PATH via shell rc).<br>• Windows → `$env:LOCALAPPDATA\unblock\unblock.exe` (added to USER PATH via `[Environment]::SetEnvironmentVariable`). |
 | 6 | Print onboarding hint pointing the user at `unblock login` / `unblock initialize`. |
@@ -37,7 +37,7 @@ Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 .
 ├── install.sh                 POSIX bash installer (Linux + macOS)
 ├── install.ps1                PowerShell 5.1+ installer (Windows)
-├── index.html                 Human-facing landing page (served to browsers)
+├── landing.html               Human-facing landing page (served to browsers)
 ├── _redirects                 CF Pages explicit-path routing
 ├── functions/index.js         CF Pages Function — UA / Accept negotiation for `/`
 ├── tests/
@@ -52,7 +52,7 @@ Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 The installer expects assets named **`unblock-<os>-<arch>[.exe]`** plus a
 **`SHA256SUMS`** file in the same release.
 
-Recommended `gh` flow from `Viraj0518/unblock_cli`:
+Recommended `gh` flow (releases are published to **this** repo, `Viraj0518/unblock-install`):
 
 ```sh
 # 1. Build native binaries (pkg, nexe, deno compile, etc.)
@@ -89,7 +89,7 @@ For v1 we trust the release artifacts based on:
 For v2 we want a full **cosign keyless-sign / verify** chain:
 
 ```sh
-# Release side (in unblock_cli CI):
+# Release side (in the CLI release CI):
 cosign sign-blob \
   --yes \
   --bundle SHA256SUMS.cosign.bundle \
@@ -98,7 +98,7 @@ cosign sign-blob \
 # Client side (added to install.sh + install.ps1):
 cosign verify-blob \
   --bundle SHA256SUMS.cosign.bundle \
-  --certificate-identity "https://github.com/Viraj0518/unblock_cli/.github/workflows/release.yml@refs/tags/${TAG}" \
+  --certificate-identity "https://github.com/Viraj0518/unblock-install/.github/workflows/release.yml@refs/tags/${TAG}" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   SHA256SUMS
 ```
@@ -128,4 +128,4 @@ pwsh -File tests/Test-InstallPs1.ps1
 
 ## License
 
-Apache-2.0. See `LICENSE` in [`Viraj0518/unblock_cli`](https://github.com/Viraj0518/unblock_cli).
+Apache-2.0. See [`LICENSE`](./LICENSE).
