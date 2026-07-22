@@ -6,7 +6,20 @@ import { readFileSync, writeFileSync, mkdtempSync, rmSync, existsSync } from 'no
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { generateKeyPairSync, sign as edSign, verify as edVerify } from 'node:crypto';
+import { generateKeyPairSync, sign as edSign, verify as edVerify, createPublicKey } from 'node:crypto';
+
+// The PRODUCTION feed signing pubkey (vault row update_feed_signing_key, minted
+// by Viraj 2026-07-21; raw 32-byte base64 = the desktop PINNED_FEED_PUBKEY).
+// A shipped updates.json.sig MUST verify against THIS key — any other key or a
+// stale sig after a feed edit fails the suite.
+const PINNED_FEED_PUBKEY_B64 = '41RfoizEw+JK8M/+MzkNB9qWKzBFnp9ttTX+Du9CeG0=';
+const ED25519_SPKI_PREFIX_HEX = '302a300506032b6570032100';
+function pinnedPublicKey() {
+  const raw = Buffer.from(PINNED_FEED_PUBKEY_B64, 'base64');
+  if (raw.length !== 32) throw new Error('pinned pubkey is not 32 raw bytes');
+  const spki = Buffer.concat([Buffer.from(ED25519_SPKI_PREFIX_HEX, 'hex'), raw]);
+  return createPublicKey({ key: spki, format: 'der', type: 'spki' });
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FEED = join(HERE, '..', 'feed', 'updates.json');
@@ -84,6 +97,14 @@ t('ed25519 detached sign/verify roundtrip + tamper detection', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+t('shipped .sig (when present) verifies against the PINNED production pubkey', () => {
+  if (!existsSync(FEED + '.sig')) { console.log('     (no .sig shipped — unsigned-dev state, pin check skipped)'); return; }
+  const sig = Buffer.from(readFileSync(FEED + '.sig', 'utf8').trim(), 'base64');
+  assert.equal(sig.length, 64, 'raw 64-byte ed25519 signature');
+  assert.equal(edVerify(null, readFileSync(FEED), pinnedPublicKey(), sig), true,
+    'updates.json.sig must verify against the pinned production key — re-run scripts/feed-publish-sign.mjs after ANY feed edit');
 });
 
 if (failures) { console.error(failures + ' failing'); process.exit(1); }
