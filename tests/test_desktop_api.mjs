@@ -1,7 +1,7 @@
 // node tests/test_desktop_api.mjs — pure-function tests for the /api/desktop
 // asset matcher. No network, no CF runtime.
 import assert from 'node:assert/strict';
-import { pickAssets, pickRelease } from '../functions/api/desktop.js';
+import { pickAssets, pickRelease, onRequest } from '../functions/api/desktop.js';
 
 const A = (name) => ({ name, browser_download_url: 'https://gh/' + name, size: 1 });
 let failures = 0;
@@ -102,6 +102,50 @@ t('empty / malformed input yields empty map', () => {
   assert.deepEqual(pickAssets([]), {});
   assert.deepEqual(pickAssets([{ name: null }, {}]), {});
 });
+
+// --- onRequest GitHub-auth header (mocked fetch; no network) ---
+async function tAsync(label, fn) {
+  try { await fn(); console.log('ok   ' + label); }
+  catch (e) { failures++; console.error('FAIL ' + label + ' — ' + e.message); }
+}
+
+// fetch stub: releases/latest -> 404 (prerelease-only), releases list -> beta shape.
+// Records the Authorization header seen on every GH call.
+function mockGH(recorder) {
+  return async (url, opts) => {
+    recorder.push({ url: String(url), auth: (opts && opts.headers && opts.headers['Authorization']) || null });
+    if (String(url).includes('/releases/latest')) return { ok: false, status: 404 };
+    return { ok: true, status: 200, json: async () => ([
+      { tag_name: 'v0.1.0-beta', draft: false, prerelease: true,
+        assets: [{ name: 'UNBLOCK_0.1.0_x64-setup.exe', browser_download_url: 'https://gh/x', size: 1 }] },
+    ]) };
+  };
+}
+
+async function withMockedGH(fn) {
+  const origFetch = globalThis.fetch, origCaches = globalThis.caches;
+  globalThis.caches = undefined; // skip edge cache in the test
+  const rec = [];
+  globalThis.fetch = mockGH(rec);
+  try { await fn(rec); } finally { globalThis.fetch = origFetch; globalThis.caches = origCaches; }
+}
+
+await tAsync('onRequest authenticates to GitHub when GITHUB_TOKEN is set', () => withMockedGH(async (rec) => {
+  const resp = await onRequest({ env: { GITHUB_TOKEN: 'tok-123', DESKTOP_REPO: 'o/r' },
+    request: { url: 'https://install.kaeva.app/api/desktop' }, waitUntil: () => {} });
+  const body = JSON.parse(await resp.text());
+  assert.equal(body.available, true);
+  assert.equal(body.platforms['windows-x64'].name, 'UNBLOCK_0.1.0_x64-setup.exe');
+  assert.ok(rec.length >= 1, 'expected at least one GitHub call');
+  for (const c of rec) assert.equal(c.auth, 'Bearer tok-123', 'each GH call must carry the token: ' + c.url);
+}));
+
+await tAsync('onRequest sends NO Authorization when GITHUB_TOKEN is absent', () => withMockedGH(async (rec) => {
+  await onRequest({ env: { DESKTOP_REPO: 'o/r' },
+    request: { url: 'https://install.kaeva.app/api/desktop' }, waitUntil: () => {} });
+  assert.ok(rec.length >= 1, 'expected at least one GitHub call');
+  for (const c of rec) assert.equal(c.auth, null, 'no token -> no Authorization header: ' + c.url);
+}));
 
 if (failures) { console.error(failures + ' failing'); process.exit(1); }
 console.log('all pickAssets tests passed');

@@ -87,6 +87,13 @@ export async function onRequest(context) {
     'User-Agent': 'install.kaeva.app desktop-release resolver',
     'Accept': 'application/vnd.github+json',
   };
+  // Authenticate to GitHub when a token is present. Unauthenticated calls share
+  // the CF edge IP's 60 req/hr GitHub limit and 403 under normal traffic (the
+  // desktop card then shows "final assembly" even though a release exists); a
+  // read-only token lifts the limit to 5000/hr. Inert without the env var, so
+  // shipping this ahead of GITHUB_TOKEN being provisioned is a safe no-op.
+  const ghToken = context.env && context.env.GITHUB_TOKEN;
+  if (ghToken) GH_HEADERS['Authorization'] = 'Bearer ' + ghToken;
   let body = { available: false, source: 'github.com/' + repo, reason: 'no public desktop release yet' };
   try {
     // releases/latest EXCLUDES prereleases (404 on a prerelease-only repo, which
