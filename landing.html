@@ -40,14 +40,16 @@
 
 <div class="card" id="desktop-card">
   <h2>Desktop app</h2>
-  <p class="status" id="desktop-status">Checking the latest desktop build&hellip;</p>
+  <!-- status text is only ever set by JS, so noscript users never see a stale
+       "checking…" line; the noscript block below is their whole desktop story -->
+  <p class="status" id="desktop-status" hidden></p>
   <p id="desktop-cta" hidden><a class="btn" id="desktop-btn" href="#">Download</a>
      <span class="muted" id="desktop-version"></span></p>
   <details id="desktop-all" hidden>
     <summary>All platforms</summary>
     <ul id="desktop-list"></ul>
   </details>
-  <noscript><p class="muted">Enable JavaScript for direct download links, or use the web app / CLI below.</p></noscript>
+  <noscript><p class="muted">Direct download links need JavaScript — use the web app or CLI below instead.</p></noscript>
 </div>
 
 <div class="card">
@@ -89,12 +91,21 @@
   };
   function detect() {
     var ua = (navigator.userAgent || '').toLowerCase();
-    if (ua.indexOf('windows') !== -1) return 'windows-x64';
+    // phones/tablets first: iOS UAs contain "mac os x" and Android UAs contain
+    // "linux" — without this they'd be offered a desktop binary they can't run.
+    // (The web app card is their path.)
+    if (/iphone|ipad|ipod|android|mobile/.test(ua)) return null;
+    var arm = /arm64|aarch64/.test(ua);
+    if (ua.indexOf('windows') !== -1) return arm ? 'windows-arm64' : 'windows-x64';
+    // Mac arch is not reliably exposed to the browser; default Apple Silicon,
+    // the "All platforms" list carries the Intel build.
     if (ua.indexOf('mac os') !== -1 || ua.indexOf('macintosh') !== -1) return 'macos-arm64';
-    if (ua.indexOf('linux') !== -1 || ua.indexOf('x11') !== -1) return 'linux-x64';
+    if (ua.indexOf('linux') !== -1 || ua.indexOf('x11') !== -1) return arm ? 'linux-arm64' : 'linux-x64';
     return null;
   }
   var statusEl = document.getElementById('desktop-status');
+  statusEl.hidden = false;
+  statusEl.textContent = 'Checking the latest desktop build…';
   fetch('/api/desktop').then(function (r) { return r.json(); }).then(function (d) {
     if (!d.available || !d.platforms || !Object.keys(d.platforms).length) {
       statusEl.textContent = 'The desktop app is in final assembly — not downloadable yet. ' +
@@ -103,18 +114,23 @@
     }
     var keys = Object.keys(d.platforms);
     var pick = detect();
-    if (!pick || !d.platforms[pick]) {
-      // fall back to the sibling arch for the detected OS, then to anything
-      var os = pick ? pick.split('-')[0] : null;
-      pick = (os && keys.filter(function (k) { return k.indexOf(os) === 0; })[0]) || keys[0];
+    if (pick && !d.platforms[pick]) {
+      // sibling arch within the SAME OS only — never a cross-OS guess
+      var os = pick.split('-')[0];
+      pick = keys.filter(function (k) { return k.indexOf(os) === 0; })[0] || null;
     }
-    var a = d.platforms[pick];
-    var btn = document.getElementById('desktop-btn');
-    btn.href = a.url;
-    btn.textContent = 'Download for ' + (LABELS[pick] || pick);
-    document.getElementById('desktop-version').textContent = d.version || '';
-    statusEl.hidden = true;
-    document.getElementById('desktop-cta').hidden = false;
+    if (pick && d.platforms[pick]) {
+      var a = d.platforms[pick];
+      var btn = document.getElementById('desktop-btn');
+      btn.href = a.url;
+      btn.textContent = 'Download for ' + (LABELS[pick] || pick);
+      document.getElementById('desktop-version').textContent = d.version || '';
+      statusEl.hidden = true;
+      document.getElementById('desktop-cta').hidden = false;
+    } else {
+      // unknown OS or mobile: no guessed primary button — offer the list
+      statusEl.textContent = 'Desktop build ' + (d.version || '') + ' — pick your platform:';
+    }
     var list = document.getElementById('desktop-list');
     keys.forEach(function (k) {
       var li = document.createElement('li');
@@ -124,7 +140,9 @@
       li.appendChild(link);
       list.appendChild(li);
     });
-    document.getElementById('desktop-all').hidden = false;
+    var all = document.getElementById('desktop-all');
+    all.hidden = false;
+    if (!pick || !d.platforms[pick]) all.open = true;
   }).catch(function () {
     statusEl.textContent = 'Could not check the desktop build right now — use the web app or the CLI below.';
   });

@@ -60,6 +60,24 @@ t('deb preferred over rpm, appimage over both', () => {
   assert.equal(p2['linux-x64'].name, 'unblock.AppImage');
 });
 
+t('32-bit builds are skipped, never mis-bucketed as x64', () => {
+  const p = pickAssets([
+    A('unblock-x86-setup.exe'),
+    A('unblock-i686.AppImage'),
+    A('unblock-i386.deb'),
+    A('unblock-armv7.deb'),
+    A('unblock-armhf.AppImage'),
+    A('unblock-win32-setup.exe'),
+  ]);
+  assert.deepEqual(p, {});
+});
+
+t('x86_64 and x86-64 still count as 64-bit', () => {
+  const p = pickAssets([A('UNBLOCK_0.1.0_x86_64.AppImage'), A('unblock-x86-64-setup.exe')]);
+  assert.equal(p['linux-x64'].name, 'UNBLOCK_0.1.0_x86_64.AppImage');
+  assert.equal(p['windows-x64'].name, 'unblock-x86-64-setup.exe');
+});
+
 t('empty / malformed input yields empty map', () => {
   assert.deepEqual(pickAssets(undefined), {});
   assert.deepEqual(pickAssets([]), {});

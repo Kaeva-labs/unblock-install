@@ -28,6 +28,11 @@ export function pickAssets(assets) {
   for (const a of assets || []) {
     if (!a || !a.name || !a.browser_download_url) continue;
     const n = a.name.toLowerCase();
+    // Skip 32-bit builds entirely — we only offer x64/arm64 slots, and bucketing
+    // i686/armv7/x86 into "x64" would hand users a binary that won't run.
+    // (Careful: `x86_64`/`x86-64` IS 64-bit and must survive this check.)
+    if (/(i[36]86|armv7l?|armhf|ia32|win32)/.test(n)) continue;
+    if (/x86/.test(n) && !/x86[_-]?64/.test(n)) continue;
     const arm = /(arm64|aarch64)/.test(n);
     if (n.endsWith('-setup.exe')) {
       put(arm ? 'windows-arm64' : 'windows-x64', a, 0);
