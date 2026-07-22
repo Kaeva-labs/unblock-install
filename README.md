@@ -119,9 +119,16 @@ the substrate SOP-ingest path (org-brain), and the M1 capability provisioner.
   served from this origin** — it is pinned in the desktop binary; a same-origin key
   would make the signature theater. Tooling: `node scripts/feed-sign.mjs
   keygen|sign|verify` (keygen output `*.key` is private — never commit).
-- **Key custody** (who signs at publish): unblock_ci / Viraj decision — OPEN; until a
-  real key exists, `updates.json.sig` is absent and clients must treat the feed as
-  unsigned-dev.
+- **Key custody (RULED 2026-07-21)**: the private key lives in the Supabase **Vault**
+  (row `update_feed_signing_key`, same custody class as the other app secrets — never a
+  key file in a repo). One-time mint: `scripts/mint_feed_signing_key.mjs` — **Viraj-run,
+  human-gated** (`--arm-viraj-run`; dry-runs otherwise; refuses if the row exists;
+  read-back sign/verify proves the stored key; prints ONLY the public key, which gets
+  pinned in the desktop binary). Publish flow: `scripts/feed-publish-sign.mjs` reads the
+  key from the Vault at publish time, signs the exact bytes, self-verifies, writes
+  `updates.json.sig`, and prints the corresponding public key for an eyeball match
+  against the pinned one. Until the mint runs, `updates.json.sig` is absent and the
+  feed is unsigned-dev (informational items only, test-enforced).
 - Sanity: `node tests/test_feed.mjs` (schema + sign/verify roundtrip + tamper detection).
 
 ## Releasing the CLI binary
