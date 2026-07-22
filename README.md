@@ -1,6 +1,10 @@
 # unblock-install
 
-Hosting source for **install.kaeva.app** — the one-liner installer for the [UNBLOCK CLI](https://github.com/Viraj0518/unblock-install/releases/latest).
+Hosting source for **install.kaeva.app** — the UNBLOCK download surface, one page serving three acquisition paths:
+
+1. **Desktop app** (Tauri) — per-OS download buttons resolved live from the desktop release repo via `/api/desktop`.
+2. **Web app / PWA** — link to [app.kaeva.app](https://app.kaeva.app) with browser-install guidance.
+3. **CLI** — the original one-liner installer for the [UNBLOCK CLI](https://github.com/Viraj0518/unblock-install/releases/latest).
 
 ## Usage
 
@@ -37,15 +41,34 @@ Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 .
 ├── install.sh                 POSIX bash installer (Linux + macOS)
 ├── install.ps1                PowerShell 5.1+ installer (Windows)
-├── landing.html               Human-facing landing page (served to browsers)
+├── landing.html               Human-facing download page (served to browsers)
 ├── _redirects                 CF Pages explicit-path routing
 ├── functions/index.js         CF Pages Function — UA / Accept negotiation for `/`
+├── functions/api/desktop.js   CF Pages Function — resolves latest desktop (Tauri) release per-platform
 ├── tests/
 │   ├── test_install_sh.sh     bash integration tests (mock GH release)
-│   └── Test-InstallPs1.ps1    PowerShell integration tests (mock GH release)
-├── .github/workflows/test.yml shellcheck + PSScriptAnalyzer + integration tests
+│   ├── Test-InstallPs1.ps1    PowerShell integration tests (mock GH release)
+│   └── test_desktop_api.mjs   node unit tests for the /api/desktop asset matcher
 └── README.md
 ```
+
+(CI note: this repo's GitHub Actions workflows were removed — CI runs on Fly via `unblock_ci`.)
+
+## Desktop app downloads (`/api/desktop`)
+
+`functions/api/desktop.js` resolves `releases/latest` of the **desktop release repo**
+(env var `DESKTOP_REPO` in the Pages project settings; default `Viraj0518/unblock_desktop`)
+and maps Tauri v2 bundle assets to platforms (`windows-x64`, `macos-arm64`, `linux-x64`, …):
+NSIS `-setup.exe` > `.msi`; arch `.dmg` > `universal.dmg`; `.AppImage` > `.deb` > `.rpm`.
+Responses are edge-cached 5 minutes. While no public desktop release exists it returns
+`{ "available": false }` and the landing page shows an honest "in final assembly" state —
+the page lights up automatically the moment a public release with bundle assets is published.
+
+> ⚠️ **Do NOT publish desktop artifacts to this repo's releases.** `install.sh` /
+> `install.ps1` resolve `releases/latest` of `Viraj0518/unblock-install` for the **CLI**;
+> a desktop release becoming "latest" here would break the CLI installer. Desktop
+> artifacts belong in the repo `DESKTOP_REPO` points at (public, with Tauri bundle
+> assets + `SHA256SUMS`).
 
 ## Releasing the CLI binary
 
@@ -124,6 +147,9 @@ bash tests/test_install_sh.sh
 
 # PowerShell installer
 pwsh -File tests/Test-InstallPs1.ps1
+
+# /api/desktop asset matcher
+node tests/test_desktop_api.mjs
 ```
 
 ## License

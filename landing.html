@@ -2,48 +2,133 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>install.kaeva.app</title>
+<title>Get UNBLOCK — install.kaeva.app</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="UNBLOCK CLI installer. curl -sSL install.kaeva.app | sh">
+<meta name="description" content="Get UNBLOCK: desktop app, web app (installable PWA), or CLI. curl -sSL install.kaeva.app | sh">
 <!--
   This page is only ever rendered to humans hitting install.kaeva.app in a browser.
-  Shell/PowerShell pipes are served directly via Cloudflare Pages routing rules
-  in `_redirects`:
-    /         -> /install.sh  (302) when Accept does NOT include text/html
-    /install.sh   -> raw file
-    /install.ps1  -> raw file
+  Shell/PowerShell pipes never see it: functions/index.js content-negotiates `/`
+  (no Accept: text/html -> install.sh; PowerShell UA or ?ps1=1 -> install.ps1).
+  Desktop download links come from /api/desktop (functions/api/desktop.js), which
+  resolves the latest desktop release server-side and is edge-cached.
 -->
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: light dark; --accent: #4a8cff; --line: rgba(127,127,127,.25); }
   body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         max-width: 720px; margin: 6em auto; padding: 0 1.5em; }
-  h1 { font-weight: 600; letter-spacing: -.02em; }
-  pre { background: rgba(127,127,127,.12); padding: 1em 1.2em; border-radius: 8px; overflow-x: auto; }
+         max-width: 720px; margin: 4em auto 6em; padding: 0 1.5em; }
+  h1 { font-weight: 600; letter-spacing: -.02em; margin-bottom: .2em; }
+  .tag { opacity: .75; margin-top: 0; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 1.1em 1.3em; margin: 1.2em 0; }
+  .card h2 { font-size: 1.05em; font-weight: 600; margin: 0 0 .5em; }
+  .btn { display: inline-block; background: var(--accent); color: #fff; text-decoration: none;
+         padding: .55em 1.1em; border-radius: 8px; font-weight: 600; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  pre { background: rgba(127,127,127,.12); padding: 1em 1.2em; border-radius: 8px; overflow-x: auto; margin: .6em 0; }
   code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
-  a { color: #4a8cff; }
-  small { opacity: .65; }
+  a { color: var(--accent); }
+  small, .muted { opacity: .65; }
+  details { margin-top: .6em; }
+  details ul { margin: .5em 0 0; padding-left: 1.2em; }
+  details li { margin: .25em 0; }
+  .status { opacity: .8; }
 </style>
 </head>
 <body>
-<h1>install.kaeva.app</h1>
-<p>Installer for the <strong>UNBLOCK</strong> CLI.</p>
+<h1>Get UNBLOCK</h1>
+<p class="tag">One living memory your humans and agents read, write, and inherit.</p>
 
-<h3>Linux &amp; macOS</h3>
-<pre><code>curl -sSL install.kaeva.app | sh</code></pre>
+<div class="card" id="desktop-card">
+  <h2>Desktop app</h2>
+  <p class="status" id="desktop-status">Checking the latest desktop build&hellip;</p>
+  <p id="desktop-cta" hidden><a class="btn" id="desktop-btn" href="#">Download</a>
+     <span class="muted" id="desktop-version"></span></p>
+  <details id="desktop-all" hidden>
+    <summary>All platforms</summary>
+    <ul id="desktop-list"></ul>
+  </details>
+  <noscript><p class="muted">Enable JavaScript for direct download links, or use the web app / CLI below.</p></noscript>
+</div>
 
-<h3>Windows (PowerShell)</h3>
-<pre><code>iwr -useb install.kaeva.app/install.ps1 | iex</code></pre>
+<div class="card">
+  <h2>Web app</h2>
+  <p><a class="btn ghost" href="https://app.kaeva.app">Open app.kaeva.app</a></p>
+  <p><small>Runs in any browser — nothing to download. To keep it like a native app,
+  use your browser&rsquo;s <em>Install</em> option (address-bar icon in Chrome/Edge,
+  Share&nbsp;&rarr;&nbsp;Add&nbsp;to&nbsp;Home&nbsp;Screen on iOS).</small></p>
+</div>
 
-<p><small>
-  <strong>Reinstalling or upgrading is safe.</strong> The installer only places the
-  <code>unblock</code> binary on your PATH — it never touches your
-  <code>~/.unblock</code> data, so your identity, comms, and saved state are
-  preserved across reinstalls.
-</small></p>
+<div class="card">
+  <h2>CLI</h2>
+  <p><strong>Linux &amp; macOS</strong></p>
+  <pre><code>curl -sSL install.kaeva.app | sh</code></pre>
+  <p><strong>Windows (PowerShell)</strong></p>
+  <pre><code>iwr -useb install.kaeva.app/install.ps1 | iex</code></pre>
+  <p><small>
+    <strong>Reinstalling or upgrading is safe.</strong> The installer only places the
+    <code>unblock</code> binary on your PATH — it never touches your
+    <code>~/.unblock</code> data, so your identity, comms, and saved state are
+    preserved across reinstalls.
+  </small></p>
+</div>
 
 <p><small>
   Source: <a href="https://github.com/Viraj0518/unblock-install">github.com/Viraj0518/unblock-install</a> ·
   CLI releases: <a href="https://github.com/Viraj0518/unblock-install/releases">github.com/Viraj0518/unblock-install/releases</a>
 </small></p>
+
+<script>
+(function () {
+  var LABELS = {
+    'windows-x64':  'Windows',
+    'windows-arm64':'Windows (ARM)',
+    'macos-arm64':  'macOS (Apple Silicon)',
+    'macos-x64':    'macOS (Intel)',
+    'linux-x64':    'Linux',
+    'linux-arm64':  'Linux (ARM64)'
+  };
+  function detect() {
+    var ua = (navigator.userAgent || '').toLowerCase();
+    if (ua.indexOf('windows') !== -1) return 'windows-x64';
+    if (ua.indexOf('mac os') !== -1 || ua.indexOf('macintosh') !== -1) return 'macos-arm64';
+    if (ua.indexOf('linux') !== -1 || ua.indexOf('x11') !== -1) return 'linux-x64';
+    return null;
+  }
+  var statusEl = document.getElementById('desktop-status');
+  fetch('/api/desktop').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.available || !d.platforms || !Object.keys(d.platforms).length) {
+      statusEl.textContent = 'The desktop app is in final assembly — not downloadable yet. ' +
+        'Use the web app or the CLI below today.';
+      return;
+    }
+    var keys = Object.keys(d.platforms);
+    var pick = detect();
+    if (!pick || !d.platforms[pick]) {
+      // fall back to the sibling arch for the detected OS, then to anything
+      var os = pick ? pick.split('-')[0] : null;
+      pick = (os && keys.filter(function (k) { return k.indexOf(os) === 0; })[0]) || keys[0];
+    }
+    var a = d.platforms[pick];
+    var btn = document.getElementById('desktop-btn');
+    btn.href = a.url;
+    btn.textContent = 'Download for ' + (LABELS[pick] || pick);
+    document.getElementById('desktop-version').textContent = d.version || '';
+    statusEl.hidden = true;
+    document.getElementById('desktop-cta').hidden = false;
+    var list = document.getElementById('desktop-list');
+    keys.forEach(function (k) {
+      var li = document.createElement('li');
+      var link = document.createElement('a');
+      link.href = d.platforms[k].url;
+      link.textContent = (LABELS[k] || k) + ' — ' + d.platforms[k].name;
+      li.appendChild(link);
+      list.appendChild(li);
+    });
+    document.getElementById('desktop-all').hidden = false;
+  }).catch(function () {
+    statusEl.textContent = 'Could not check the desktop build right now — use the web app or the CLI below.';
+  });
+})();
+</script>
 </body>
 </html>
