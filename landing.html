@@ -58,8 +58,10 @@
 
 <div class="card" id="desktop-card">
   <h2>Desktop app <span class="muted" style="font-weight:400">— have an invite?</span></h2>
-  <p><small>The download is open; you&rsquo;ll need your invite code when the app first runs.
-     No invite yet? Join the waitlist above.</small></p>
+  <!-- only rendered once a downloadable build actually exists; while the desktop
+       status says "final assembly" this claim would contradict it -->
+  <p id="desktop-invite-note" hidden><small>The download is open; you&rsquo;ll need your invite code
+     when the app first runs. No invite yet? Join the waitlist above.</small></p>
   <!-- status text is only ever set by JS, so noscript users never see a stale
        "checking…" line; the noscript block below is their whole desktop story -->
   <p class="status" id="desktop-status" hidden></p>
@@ -176,6 +178,7 @@
     all.hidden = false;
     if (!pick || !d.platforms[pick]) all.open = true;
     document.getElementById('desktop-unsigned').hidden = false;
+    document.getElementById('desktop-invite-note').hidden = false;
   }).catch(function () {
     statusEl.textContent = 'Could not check the desktop build right now — use the web app or the CLI below.';
   });
