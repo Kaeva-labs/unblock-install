@@ -198,12 +198,15 @@
     btn.disabled = true;
     wlStatus.hidden = false;
     wlStatus.textContent = 'Joining…';
+    // deliberately does NOT send the honeypot field: aggressive browser
+    // autofill can fill the hidden input, and forwarding it would quiet-drop
+    // a real person with a fake success. The honeypot guards raw form POSTs
+    // (bots); this JS path is human-driven by construction.
     fetch('/api/waitlist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: document.getElementById('waitlist-email').value,
-        website: form.elements.website.value
+        email: document.getElementById('waitlist-email').value
       })
     }).then(function (r) { return r.json().then(function (b) { return { s: r.status, b: b }; }); })
       .then(function (res) {
