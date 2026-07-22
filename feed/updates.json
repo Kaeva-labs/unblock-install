@@ -1,0 +1,17 @@
+{
+  "schema": "unblock-update-feed/v1",
+  "generated_at": "2026-07-22T04:15:00Z",
+  "items": [
+    {
+      "id": "2026-07-22-desktop-v0.1.0-beta",
+      "date": "2026-07-22",
+      "kind": "release",
+      "title": "The UNBLOCK desktop app beta is here for Windows.",
+      "body": "One download sets everything up. You'll need your invite code the first time it runs.",
+      "action": {
+        "label": "Get it",
+        "url": "https://install.kaeva.app"
+      }
+    }
+  ]
+}

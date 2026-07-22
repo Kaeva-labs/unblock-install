@@ -84,6 +84,26 @@ Deploy checklist for the waitlist path:
    has no per-IP limit — by design, edge rules are the right layer).
 3. Upstream store must upsert by email (idempotent) so repeat submissions dedupe.
 
+## Update feed (`/feed/updates.json`) — M2 update channel
+
+Static signed JSON feed (Viraj ruling, PRD-VOICE-PROACTIVE-DESKTOP §4-M2) announcing
+shipped features + SOP updates. Consumers: the desktop **What's New** pane (humans),
+the substrate SOP-ingest path (org-brain), and the M1 capability provisioner.
+
+- **Schema `unblock-update-feed/v1`**: `{schema, generated_at, items[]}`; each item
+  `{id, date, kind: feature|sop|release, title, body, action?{label,url},
+  sop?{content,tags,supersedes}, provision?{skills,plugins}}`. Title = one plain-language
+  sentence, one button (Frank-mode default; maya owns copy — every item is a public claim).
+- **Signature**: ed25519 detached over the EXACT BYTES of `updates.json`, base64 in
+  `updates.json.sig`. Never reformat the file after signing. **The public key is NOT
+  served from this origin** — it is pinned in the desktop binary; a same-origin key
+  would make the signature theater. Tooling: `node scripts/feed-sign.mjs
+  keygen|sign|verify` (keygen output `*.key` is private — never commit).
+- **Key custody** (who signs at publish): unblock_ci / Viraj decision — OPEN; until a
+  real key exists, `updates.json.sig` is absent and clients must treat the feed as
+  unsigned-dev.
+- Sanity: `node tests/test_feed.mjs` (schema + sign/verify roundtrip + tamper detection).
+
 ## Releasing the CLI binary
 
 The installer expects assets named **`unblock-<os>-<arch>[.exe]`** plus a
