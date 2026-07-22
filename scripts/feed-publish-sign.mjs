@@ -61,3 +61,5 @@ writeFileSync(FEED + '.sig', sig.toString('base64') + '\n');
 console.log('wrote feed/updates.json.sig (self-verified over ' + bytes.length + ' bytes)');
 console.log('signing key corresponds to this PUBLIC key (must match the desktop-pinned one):');
 console.log(pub.export({ type: 'spki', format: 'pem' }).toString());
+console.log('RAW 32-byte form (base64 — the desktop PINNED_FEED_PUBKEY format):');
+console.log(pub.export({ type: 'spki', format: 'der' }).subarray(-32).toString('base64'));

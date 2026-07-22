@@ -73,6 +73,10 @@ try {
   console.log('MINTED + READ-BACK-VERIFIED. Vault row: ' + SECRET_NAME);
   console.log('PUBLIC KEY (pin in desktop binary; give to unblock_desktop; commit to feed docs):');
   console.log(pubPem);
+  // desktop's verifier pins the RAW 32-byte key (SPKI DER = 12-byte prefix + raw key)
+  const raw = publicKey.export({ type: 'spki', format: 'der' }).subarray(-32);
+  console.log('RAW 32-byte form (base64, for the desktop PINNED_FEED_PUBKEY):');
+  console.log(raw.toString('base64'));
 } finally {
   await sql.end({ timeout: 5 });
 }
