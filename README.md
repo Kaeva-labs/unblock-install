@@ -70,6 +70,19 @@ the page lights up automatically the moment a public release with bundle assets 
 > artifacts belong in the repo `DESKTOP_REPO` points at (public, with Tauri bundle
 > assets + `SHA256SUMS`).
 
+## Beta waitlist (`/api/waitlist`)
+
+`functions/api/waitlist.js` accepts `POST {email}` (JSON or form-encoded), drops
+honeypot hits quietly, and proxies valid signups to the `WAITLIST_ENDPOINT` env var
+(owned by unblock_substrate; proposed contract `POST {email, source, ts}` → 2xx).
+Unconfigured → honest `503`; upstream failure → honest `502`; never a fake success.
+
+Deploy checklist for the waitlist path:
+1. Set `WAITLIST_ENDPOINT` in the Pages project settings.
+2. Add a Cloudflare WAF rate-limit rule on `POST /api/waitlist` (the function itself
+   has no per-IP limit — by design, edge rules are the right layer).
+3. Upstream store must upsert by email (idempotent) so repeat submissions dedupe.
+
 ## Releasing the CLI binary
 
 The installer expects assets named **`unblock-<os>-<arch>[.exe]`** plus a

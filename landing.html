@@ -48,6 +48,11 @@
   <h2>Join the beta</h2>
   <p>UNBLOCK is in an invite-gated beta — invites go out in waves as capacity opens.
      Join the waitlist and we&rsquo;ll send yours.</p>
+  <!-- no-JS: hide the form (a raw form POST would land on a bare JSON response)
+       and say so honestly instead -->
+  <noscript><style>#waitlist-form { display: none; }</style>
+    <p class="muted">The waitlist form needs JavaScript enabled.</p>
+  </noscript>
   <form id="waitlist-form" class="row" method="post" action="/api/waitlist">
     <input type="email" name="email" id="waitlist-email" placeholder="you@company.com"
            required autocomplete="email" aria-label="Email address">

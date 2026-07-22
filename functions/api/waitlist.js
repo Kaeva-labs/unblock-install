@@ -8,6 +8,12 @@
 // (proposed contract: POST {email, source, ts} -> 2xx). Until it is set, this
 // returns an honest 503 and the page shows a "not taking signups yet" state —
 // never a fake success.
+//
+// Abuse boundary: validEmail rejects whitespace (incl. CRLF) and caps length;
+// the email only ever travels in a JSON body, never a header. There is NO
+// per-IP rate limit here — that belongs to Cloudflare WAF rules on the Pages
+// project plus dedupe-by-email (idempotent upsert) in the upstream store; both
+// are part of the deploy/contract checklist, documented in the README.
 
 export function validEmail(s) {
   if (typeof s !== 'string') return false;
