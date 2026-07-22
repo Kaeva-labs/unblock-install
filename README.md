@@ -4,7 +4,7 @@ Hosting source for **install.kaeva.app** — the UNBLOCK download surface, one p
 
 1. **Desktop app** (Tauri) — per-OS download buttons resolved live from the desktop release repo via `/api/desktop`.
 2. **Web app / PWA** — link to [app.kaeva.app](https://app.kaeva.app) with browser-install guidance.
-3. **CLI** — the original one-liner installer for the [UNBLOCK CLI](https://github.com/Viraj0518/unblock-install/releases/latest).
+3. **CLI** — the original one-liner installer for the [UNBLOCK CLI](https://github.com/Kaeva-labs/unblock-install/releases/latest).
 
 ## Usage
 
@@ -28,7 +28,7 @@ Hosting source for **install.kaeva.app** — the UNBLOCK download surface, one p
 |------|----------|
 | 1 | Detect OS (`linux` / `darwin` / `windows`) and arch (`x64` / `arm64`). |
 | 2 | If `unblock` is already on PATH and its `--version` is ≥ the latest GitHub release, exit `2`. |
-| 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Viraj0518/unblock-install`. |
+| 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Kaeva-labs/unblock-install`. |
 | 4 | SHA256-verify against `SHA256SUMS` published alongside the release. |
 | 5 | Install:<br>• Linux/macOS → `$HOME/.local/bin/unblock` (chmod +x; prepended to PATH via shell rc).<br>• Windows → `$env:LOCALAPPDATA\unblock\unblock.exe` (added to USER PATH via `[Environment]::SetEnvironmentVariable`). |
 | 6 | Print onboarding hint pointing the user at `unblock login` / `unblock initialize`. |
@@ -65,7 +65,7 @@ Responses are edge-cached 5 minutes. While no public desktop release exists it r
 the page lights up automatically the moment a public release with bundle assets is published.
 
 > ⚠️ **Do NOT publish desktop artifacts to this repo's releases.** `install.sh` /
-> `install.ps1` resolve `releases/latest` of `Viraj0518/unblock-install` for the **CLI**;
+> `install.ps1` resolve `releases/latest` of `Kaeva-labs/unblock-install` for the **CLI**;
 > a desktop release becoming "latest" here would break the CLI installer. Desktop
 > artifacts belong in the repo `DESKTOP_REPO` points at (public, with Tauri bundle
 > assets + `SHA256SUMS`).
@@ -92,7 +92,7 @@ Canonical build+publish machinery lives in `unblock_ci/release-runner/scripts/bu
 (clones the polyrepo siblings, builds the pkg target matrix, generates `SHA256SUMS`, publishes
 via `gh`). GitHub Actions is billing-locked, so releases are cut off-Actions on a Fly runner
 (v0.1.6 was cut by the patched variant in `unblock_cli.wt-v016/`). Releases land on **this**
-repo (`Viraj0518/unblock-install`) — that is what the installer scripts resolve at runtime.
+repo (`Kaeva-labs/unblock-install`) — that is what the installer scripts resolve at runtime.
 
 Equivalent manual `gh` flow:
 
@@ -140,7 +140,7 @@ cosign sign-blob \
 # Client side (added to install.sh + install.ps1):
 cosign verify-blob \
   --bundle SHA256SUMS.cosign.bundle \
-  --certificate-identity "https://github.com/Viraj0518/unblock-install/.github/workflows/release.yml@refs/tags/${TAG}" \
+  --certificate-identity "https://github.com/Kaeva-labs/unblock-install/.github/workflows/release.yml@refs/tags/${TAG}" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   SHA256SUMS
 ```
@@ -152,7 +152,7 @@ is not yet performed.
 
 This repo is wired to **`install.kaeva.app`** via Cloudflare Pages:
 
-1. Pages → **Create project** → **Connect to Git** → `Viraj0518/unblock-install` → `main` branch.
+1. Pages → **Create project** → **Connect to Git** → `Kaeva-labs/unblock-install` → `main` branch.
 2. Build command: *(none — static)*. Output directory: `/`.
 3. **Custom domains** → add `install.kaeva.app` (CNAME to `<project>.pages.dev`, orange-cloud proxied for auto-cert).
 4. The Pages Function at `functions/index.js` handles UA-based content negotiation for `/`.

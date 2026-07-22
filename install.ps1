@@ -7,7 +7,7 @@
 #   1. Detect arch (x64/arm64)
 #   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
 #   3. Download latest release artifact from
-#      github.com/Viraj0518/unblock-install/releases/latest
+#      github.com/Kaeva-labs/unblock-install/releases/latest
 #   4. Verify SHA256 against SHA256SUMS published alongside the release
 #   5. Install to $env:LOCALAPPDATA\unblock\unblock.exe, prepend to USER PATH
 #   6. Print onboarding hint
@@ -23,7 +23,7 @@
 $ErrorActionPreference = 'Stop'
 
 # ---------- config ----------
-$Repo        = 'Viraj0518/unblock-install'
+$Repo        = 'Kaeva-labs/unblock-install'
 $BinName     = 'unblock.exe'
 $InstallDir  = if ($env:UNBLOCK_INSTALL_DIR) { $env:UNBLOCK_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'unblock' }
 $TmpDir      = Join-Path ([System.IO.Path]::GetTempPath()) ("unblock-install-" + [System.Guid]::NewGuid().ToString('N'))

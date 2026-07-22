@@ -8,7 +8,7 @@
 #   1. Detect OS (linux/darwin) + arch (x64/arm64)
 #   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
 #   3. Download latest release artifact from
-#      github.com/Viraj0518/unblock-install/releases/latest
+#      github.com/Kaeva-labs/unblock-install/releases/latest
 #   4. Verify sha256 against SHA256SUMS published alongside the release
 #   5. Install to $HOME/.local/bin/unblock (chmod +x, prepend to PATH in rc)
 #   6. Print onboarding hint
@@ -24,7 +24,7 @@
 set -eu
 
 # ---------- config ----------
-REPO="Viraj0518/unblock-install"
+REPO="Kaeva-labs/unblock-install"
 INSTALL_DIR="${UNBLOCK_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_NAME="unblock"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t unblock-install)"

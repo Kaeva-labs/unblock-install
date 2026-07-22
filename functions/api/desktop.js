@@ -4,7 +4,7 @@
 // download map the landing page renders. Release repo is configurable via the
 // DESKTOP_REPO env var (Pages project settings); defaults to the desktop repo.
 //
-// IMPORTANT: desktop artifacts must NOT be published to Viraj0518/unblock-install
+// IMPORTANT: desktop artifacts must NOT be published to Kaeva-labs/unblock-install
 // releases — install.sh/install.ps1 resolve `releases/latest` of THAT repo for
 // the CLI, and a desktop release becoming "latest" would break the CLI installer.
 //
