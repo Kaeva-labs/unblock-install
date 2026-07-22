@@ -12,7 +12,7 @@
 // the landing page shows an honest "in final assembly" state. The moment a
 // public release with Tauri bundle assets lands, this lights up unchanged.
 
-export const DESKTOP_REPO_DEFAULT = 'Viraj0518/unblock_desktop';
+export const DESKTOP_REPO_DEFAULT = 'Kaeva-labs/unblock';
 
 // Map GitHub release assets (Tauri v2 bundle outputs) to platform slots.
 // Lower rank wins within a slot. Deliberately ignores bare `.exe` files that
@@ -60,6 +60,17 @@ export function pickAssets(assets) {
   return platforms;
 }
 
+// Newest non-draft release (GitHub lists newest-first) that yields at least
+// one platform slot. Prereleases count — during the beta they are all we have.
+export function pickRelease(releases) {
+  for (const rel of releases || []) {
+    if (!rel || rel.draft) continue;
+    const platforms = pickAssets(rel.assets);
+    if (Object.keys(platforms).length > 0) return { rel, platforms };
+  }
+  return null;
+}
+
 export async function onRequest(context) {
   const repo = (context.env && context.env.DESKTOP_REPO) || DESKTOP_REPO_DEFAULT;
 
@@ -72,21 +83,38 @@ export async function onRequest(context) {
     if (hit) return hit;
   }
 
+  const GH_HEADERS = {
+    'User-Agent': 'install.kaeva.app desktop-release resolver',
+    'Accept': 'application/vnd.github+json',
+  };
   let body = { available: false, source: 'github.com/' + repo, reason: 'no public desktop release yet' };
   try {
-    const gh = await fetch('https://api.github.com/repos/' + repo + '/releases/latest', {
-      headers: {
-        'User-Agent': 'install.kaeva.app desktop-release resolver',
-        'Accept': 'application/vnd.github+json',
-      },
-    });
-    if (gh.ok) {
-      const rel = await gh.json();
+    // releases/latest EXCLUDES prereleases (404 on a prerelease-only repo, which
+    // is exactly the beta state: v0.1.0-beta is prerelease:true). Try it first,
+    // then fall back to the releases list and take the newest non-draft entry.
+    let rel = null;
+    const latest = await fetch('https://api.github.com/repos/' + repo + '/releases/latest', { headers: GH_HEADERS });
+    if (latest.ok) {
+      rel = await latest.json();
+    } else {
+      const list = await fetch('https://api.github.com/repos/' + repo + '/releases?per_page=10', { headers: GH_HEADERS });
+      if (list.ok) {
+        const rels = await list.json();
+        const found = pickRelease(Array.isArray(rels) ? rels : []);
+        if (found) rel = found.rel;
+        else body.reason = 'no non-draft release with desktop bundle assets on ' + repo;
+      } else {
+        // 404 = repo private or missing — the expected pre-launch state.
+        body.reason = 'github releases -> HTTP ' + list.status;
+      }
+    }
+    if (rel) {
       const platforms = pickAssets(rel.assets);
       if (Object.keys(platforms).length > 0) {
         body = {
           available: true,
           version: rel.tag_name,
+          prerelease: !!rel.prerelease,
           published_at: rel.published_at,
           source: 'github.com/' + repo,
           platforms,
@@ -94,9 +122,6 @@ export async function onRequest(context) {
       } else {
         body.reason = 'release ' + rel.tag_name + ' has no desktop bundle assets';
       }
-    } else {
-      // 404 = repo private or no releases — the expected pre-launch state.
-      body.reason = 'github releases/latest -> HTTP ' + gh.status;
     }
   } catch (e) {
     body.reason = 'github api unreachable: ' + ((e && e.message) || String(e));

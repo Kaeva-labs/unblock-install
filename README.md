@@ -56,13 +56,14 @@ Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 
 ## Desktop app downloads (`/api/desktop`)
 
-`functions/api/desktop.js` resolves `releases/latest` of the **desktop release repo**
-(env var `DESKTOP_REPO` in the Pages project settings; default `Viraj0518/unblock_desktop`)
+`functions/api/desktop.js` resolves the newest release of the **desktop release repo**
+(env var `DESKTOP_REPO` in the Pages project settings; default `Kaeva-labs/unblock`)
 and maps Tauri v2 bundle assets to platforms (`windows-x64`, `macos-arm64`, `linux-x64`, …):
 NSIS `-setup.exe` > `.msi`; arch `.dmg` > `universal.dmg`; `.AppImage` > `.deb` > `.rpm`.
-Responses are edge-cached 5 minutes. While no public desktop release exists it returns
-`{ "available": false }` and the landing page shows an honest "in final assembly" state —
-the page lights up automatically the moment a public release with bundle assets is published.
+It tries `releases/latest` first, then falls back to the releases list because
+`releases/latest` excludes prereleases — and the beta ships as `prerelease: true`
+(`v0.1.0-beta`). Responses are edge-cached 5 minutes. If no usable release exists it
+returns `{ "available": false }` and the landing page shows an honest degraded state.
 
 > ⚠️ **Do NOT publish desktop artifacts to this repo's releases.** `install.sh` /
 > `install.ps1` resolve `releases/latest` of `Kaeva-labs/unblock-install` for the **CLI**;
@@ -90,8 +91,7 @@ The installer expects assets named **`unblock-<os>-<arch>[.exe]`** plus a
 
 Canonical build+publish machinery lives in `unblock_ci/release-runner/scripts/build-and-release.sh`
 (clones the polyrepo siblings, builds the pkg target matrix, generates `SHA256SUMS`, publishes
-via `gh`). GitHub Actions is billing-locked, so releases are cut off-Actions on a Fly runner
-(v0.1.6 was cut by the patched variant in `unblock_cli.wt-v016/`). Releases land on **this**
+via `gh`). Releases are cut on an off-Actions runner. They land on **this**
 repo (`Kaeva-labs/unblock-install`) — that is what the installer scripts resolve at runtime.
 
 Equivalent manual `gh` flow:

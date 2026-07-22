@@ -1,7 +1,7 @@
 // node tests/test_desktop_api.mjs — pure-function tests for the /api/desktop
 // asset matcher. No network, no CF runtime.
 import assert from 'node:assert/strict';
-import { pickAssets } from '../functions/api/desktop.js';
+import { pickAssets, pickRelease } from '../functions/api/desktop.js';
 
 const A = (name) => ({ name, browser_download_url: 'https://gh/' + name, size: 1 });
 let failures = 0;
@@ -76,6 +76,25 @@ t('x86_64 and x86-64 still count as 64-bit', () => {
   const p = pickAssets([A('UNBLOCK_0.1.0_x86_64.AppImage'), A('unblock-x86-64-setup.exe')]);
   assert.equal(p['linux-x64'].name, 'UNBLOCK_0.1.0_x86_64.AppImage');
   assert.equal(p['windows-x64'].name, 'unblock-x86-64-setup.exe');
+});
+
+t('REAL v0.1.0-beta release shape (Kaeva-labs/unblock) maps windows-x64 only', () => {
+  const p = pickAssets([A('UNBLOCK_0.1.0_x64-setup.exe'), A('SHA256SUMS.txt')]);
+  assert.equal(p['windows-x64'].name, 'UNBLOCK_0.1.0_x64-setup.exe');
+  assert.equal(Object.keys(p).length, 1);
+});
+
+t('pickRelease skips drafts AND asset-less releases, takes newest usable', () => {
+  const rels = [
+    { tag_name: 'v0.3.0', draft: true, assets: [A('UNBLOCK_0.3.0_x64-setup.exe')] },
+    { tag_name: 'v0.2.0', draft: false, assets: [A('source.zip')] },
+    { tag_name: 'v0.1.0-beta', draft: false, prerelease: true, assets: [A('UNBLOCK_0.1.0_x64-setup.exe'), A('SHA256SUMS.txt')] },
+  ];
+  const found = pickRelease(rels);
+  assert.equal(found.rel.tag_name, 'v0.1.0-beta');
+  assert.equal(found.platforms['windows-x64'].name, 'UNBLOCK_0.1.0_x64-setup.exe');
+  assert.equal(pickRelease([]), null);
+  assert.equal(pickRelease(undefined), null);
 });
 
 t('empty / malformed input yields empty map', () => {
