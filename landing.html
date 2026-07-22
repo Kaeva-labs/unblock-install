@@ -34,6 +34,9 @@
   details li { margin: .25em 0; }
   .status { opacity: .8; }
   .row { display: flex; gap: .6em; flex-wrap: wrap; }
+  /* the hidden attribute must beat .row's display:flex (UA [hidden] style loses
+     to any author display rule — without this the "hide form on success" is a no-op) */
+  [hidden] { display: none !important; }
   input[type=email] { flex: 1 1 14em; font: inherit; padding: .5em .8em; border: 1px solid var(--line);
          border-radius: 8px; background: transparent; color: inherit; min-width: 0; }
   button.btn { border: 0; cursor: pointer; font: inherit; }
