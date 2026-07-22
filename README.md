@@ -75,7 +75,13 @@ the page lights up automatically the moment a public release with bundle assets 
 The installer expects assets named **`unblock-<os>-<arch>[.exe]`** plus a
 **`SHA256SUMS`** file in the same release.
 
-Recommended `gh` flow (releases are published to **this** repo, `Viraj0518/unblock-install`):
+Canonical build+publish machinery lives in `unblock_ci/release-runner/scripts/build-and-release.sh`
+(clones the polyrepo siblings, builds the pkg target matrix, generates `SHA256SUMS`, publishes
+via `gh`). GitHub Actions is billing-locked, so releases are cut off-Actions on a Fly runner
+(v0.1.6 was cut by the patched variant in `unblock_cli.wt-v016/`). Releases land on **this**
+repo (`Viraj0518/unblock-install`) — that is what the installer scripts resolve at runtime.
+
+Equivalent manual `gh` flow:
 
 ```sh
 # 1. Build native binaries (pkg, nexe, deno compile, etc.)
