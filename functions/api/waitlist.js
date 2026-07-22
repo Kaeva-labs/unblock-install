@@ -3,11 +3,14 @@
 // Beta waitlist signup for the loud-beta (spec blk_157da46d4752e8dab0c76b0e64061797:
 // publicly announced, invite-gated; Viraj mints invites in manual waves).
 //
-// This function is a thin proxy: the real store is owned by unblock_substrate.
-// Set WAITLIST_ENDPOINT in the Pages project settings to the upstream URL
-// (proposed contract: POST {email, source, ts} -> 2xx). Until it is set, this
-// returns an honest 503 and the page shows a "not taking signups yet" state —
-// never a fake success.
+// This function is a thin proxy: the store of record is unblock_storage's
+// beta_requests table (mig 054), written via the issuer route
+// POST auth.kaeva.app/v1/beta/request. Set WAITLIST_ENDPOINT to that URL. The
+// issuer accepts {email (required, RFC5321), received_at?, use_case?,
+// agent_count?, country?, cf_turnstile_token?} and STRIPS unknown keys (so
+// `source` is dropped today — kept for forward-compat if it's ever accepted).
+// Until WAITLIST_ENDPOINT is set, this returns an honest 503 and the page
+// shows a "not taking signups yet" state — never a fake success.
 //
 // Abuse boundary: validEmail rejects whitespace (incl. CRLF) and caps length;
 // the email only ever travels in a JSON body, never a header. There is NO
@@ -69,7 +72,7 @@ export async function onRequestPost(context) {
       body: JSON.stringify({
         email,
         source: 'install.kaeva.app',
-        ts: new Date().toISOString(),
+        received_at: new Date().toISOString(),
       }),
     });
     if (resp.ok) return json(202, { ok: true });

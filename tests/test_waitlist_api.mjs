@@ -59,7 +59,7 @@ await t('no WAITLIST_ENDPOINT -> honest 503, never fake success', async () => {
   assert.equal(body.ok, false);
 });
 
-await t('happy path -> 202 and upstream receives email+source', async () => {
+await t('happy path -> 202 and upstream receives email + received_at (issuer contract)', async () => {
   const calls = mockFetch(() => Promise.resolve(new Response('{}', { status: 200 })));
   const resp = await onRequestPost({ request: jsonReq({ email: 'sam@company.com' }), env: { WAITLIST_ENDPOINT: 'https://up/join' } });
   globalThis.fetch = realFetch;
@@ -69,7 +69,9 @@ await t('happy path -> 202 and upstream receives email+source', async () => {
   const sent = JSON.parse(calls[0][1].body);
   assert.equal(sent.email, 'sam@company.com');
   assert.equal(sent.source, 'install.kaeva.app');
-  assert.ok(sent.ts);
+  // issuer wants received_at (ISO), not ts — the old key was silently ignored
+  assert.ok(sent.received_at && !Number.isNaN(Date.parse(sent.received_at)));
+  assert.equal(sent.ts, undefined);
 });
 
 await t('upstream failure -> honest 502', async () => {
