@@ -10,7 +10,7 @@
       "body": "One download sets everything up. You'll need your invite code the first time it runs.",
       "action": {
         "label": "Get it",
-        "url": "https://install.kaeva.app"
+        "target": "https://install.kaeva.app"
       }
     }
   ]

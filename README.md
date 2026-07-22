@@ -91,9 +91,29 @@ shipped features + SOP updates. Consumers: the desktop **What's New** pane (huma
 the substrate SOP-ingest path (org-brain), and the M1 capability provisioner.
 
 - **Schema `unblock-update-feed/v1`**: `{schema, generated_at, items[]}`; each item
-  `{id, date, kind: feature|sop|release, title, body, action?{label,url},
-  sop?{content,tags,supersedes}, provision?{skills,plugins}}`. Title = one plain-language
-  sentence, one button (Frank-mode default; maya owns copy — every item is a public claim).
+  `{id, date, kind: feature|sop|release, title, body, action?{label, target},
+  sop?{content, sop_version, tags?}, provision?{manifest_url, min_manifest_version}}`.
+  `action.target` is an https URL or a local `app:` route (desktop pane opens https via
+  its system-browser opener). `provision` carries ONLY the manifest pointer — the feed is
+  the notification, the signed manifest is the authority (unblock_cli M1 interim
+  contract). Title = one plain-language sentence, one button (Frank-mode default; maya
+  owns copy — every item is a public claim).
+- **Transport note for verifiers**: sign/verify is over the origin file's exact bytes;
+  HTTP content-encoding (gzip/br) is transparent — verify the DECODED response body,
+  which equals the origin bytes. Never re-serialize the JSON before verifying.
+- **SOP items** (per SOP-WRITE-CONTRACT **v1.1**, blk_7bc37a74, supersedes blk_69cdf67d):
+  the item `id` is the **supersede join key and MUST stay stable across versions** of the
+  same SOP — bump `sop.sop_version` (monotonic int) and `date`, never the id. Per-install
+  clients (no org-side ingester) write versions append-only via `/v1/remember` with
+  `parent_block_id` lineage; newest-per-id wins on read. No `supersedes` field exists —
+  the feed cannot reference per-org block ids. Substrate dedup is (author_did,
+  content_hash) = AUTHOR-scoped, so clients MUST pre-check by id tag + sop_version
+  before writing (contract §v1.1).
+- **Hard gate**: `kind=sop` items and `provision` fields MUST NOT ship while the feed is
+  unsigned — signature verification is a hard precondition for brain writes and
+  provisioning (substrate contract). The unsigned-dev feed may carry only informational
+  `feature`/`release` items. Enforced by `tests/test_feed.mjs` (fails if a sop/provision
+  item exists without `updates.json.sig` alongside).
 - **Signature**: ed25519 detached over the EXACT BYTES of `updates.json`, base64 in
   `updates.json.sig`. Never reformat the file after signing. **The public key is NOT
   served from this origin** — it is pinned in the desktop binary; a same-origin key
