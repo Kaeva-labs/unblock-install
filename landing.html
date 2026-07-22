@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>Get UNBLOCK — by Kaeva Labs</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Get UNBLOCK (by Kaeva Labs): join the alpha waitlist, download the desktop app, use the web app, or install the CLI.">
+<meta name="description" content="Get UNBLOCK (by Kaeva Labs): join the beta waitlist, download the desktop app, use the web app, or install the CLI.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!--
   This page is only ever rendered to humans hitting install.kaeva.app in a browser.
@@ -48,8 +48,8 @@
 <p class="tag">One living memory your humans and agents read, write, and inherit.</p>
 
 <div class="card">
-  <h2>Join the alpha</h2>
-  <p>UNBLOCK is in an invite-gated alpha — invites go out in waves as capacity opens.
+  <h2>Join the beta</h2>
+  <p>UNBLOCK is in an invite-gated beta — invites go out in waves as capacity opens.
      Join the waitlist and we&rsquo;ll send yours.</p>
   <!-- no-JS: hide the form (a raw form POST would land on a bare JSON response)
        and say so honestly instead -->
@@ -82,7 +82,7 @@
   </details>
   <details id="desktop-unsigned" hidden>
     <summary>&ldquo;Windows protected your PC&rdquo; / &ldquo;Apple could not verify&rdquo;?</summary>
-    <p><small>The alpha binary is not code-signed yet, so Windows and macOS will warn on first run:</small></p>
+    <p><small>The beta binary is not code-signed yet, so Windows and macOS will warn on first run:</small></p>
     <ul>
       <li><small><strong>Windows (SmartScreen):</strong> click <em>More info</em> &rarr; <em>Run anyway</em>.</small></li>
       <li><small><strong>macOS (Gatekeeper):</strong> right-click the app &rarr; <em>Open</em> &rarr; <em>Open</em>,
@@ -131,10 +131,6 @@
     'linux-x64':    'Linux',
     'linux-arm64':  'Linux (ARM64)'
   };
-  // Show a clean version — drop the semver prerelease suffix (-beta/-alpha/-rc)
-  // so the badge stays coherent with the page's "alpha" label. The GitHub
-  // release tag (e.g. v0.1.0-beta) remains the technical id; users see v0.1.0.
-  function fmtVer(v) { return (v || '').replace(/-(?:alpha|beta|rc)[.\-\w]*$/i, ''); }
   function detect() {
     var ua = (navigator.userAgent || '').toLowerCase();
     // phones/tablets first: iOS UAs contain "mac os x" and Android UAs contain
@@ -170,12 +166,12 @@
       var btn = document.getElementById('desktop-btn');
       btn.href = a.url;
       btn.textContent = 'Download for ' + (LABELS[pick] || pick);
-      document.getElementById('desktop-version').textContent = fmtVer(d.version);
+      document.getElementById('desktop-version').textContent = d.version || '';
       statusEl.hidden = true;
       document.getElementById('desktop-cta').hidden = false;
     } else {
       // unknown OS or mobile: no guessed primary button — offer the list
-      statusEl.textContent = 'Desktop build ' + fmtVer(d.version) + ' — pick your platform:';
+      statusEl.textContent = 'Desktop build ' + (d.version || '') + ' — pick your platform:';
     }
     var list = document.getElementById('desktop-list');
     keys.forEach(function (k) {
