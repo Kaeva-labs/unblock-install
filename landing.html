@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Get UNBLOCK — install.kaeva.app</title>
+<title>Get UNBLOCK — by Kaeva Labs</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="Get UNBLOCK: desktop app, web app (installable PWA), or CLI. curl -sSL install.kaeva.app | sh">
+<meta name="description" content="Get UNBLOCK (by Kaeva Labs): join the beta waitlist, download the desktop app, use the web app, or install the CLI.">
 <!--
   This page is only ever rendered to humans hitting install.kaeva.app in a browser.
   Shell/PowerShell pipes never see it: functions/index.js content-negotiates `/`
@@ -32,14 +32,34 @@
   details ul { margin: .5em 0 0; padding-left: 1.2em; }
   details li { margin: .25em 0; }
   .status { opacity: .8; }
+  .row { display: flex; gap: .6em; flex-wrap: wrap; }
+  input[type=email] { flex: 1 1 14em; font: inherit; padding: .5em .8em; border: 1px solid var(--line);
+         border-radius: 8px; background: transparent; color: inherit; min-width: 0; }
+  button.btn { border: 0; cursor: pointer; font: inherit; }
+  .hp { position: absolute; left: -9999px; opacity: 0; height: 0; width: 0; }
 </style>
 </head>
 <body>
 <h1>Get UNBLOCK</h1>
 <p class="tag">One living memory your humans and agents read, write, and inherit.</p>
 
+<div class="card">
+  <h2>Join the beta</h2>
+  <p>UNBLOCK is in an invite-gated beta — invites go out in waves as capacity opens.
+     Join the waitlist and we&rsquo;ll send yours.</p>
+  <form id="waitlist-form" class="row" method="post" action="/api/waitlist">
+    <input type="email" name="email" id="waitlist-email" placeholder="you@company.com"
+           required autocomplete="email" aria-label="Email address">
+    <input type="text" name="website" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <button class="btn" type="submit" id="waitlist-btn">Join the waitlist</button>
+  </form>
+  <p class="status" id="waitlist-status" hidden></p>
+</div>
+
 <div class="card" id="desktop-card">
-  <h2>Desktop app</h2>
+  <h2>Desktop app <span class="muted" style="font-weight:400">— have an invite?</span></h2>
+  <p><small>The download is open; you&rsquo;ll need your invite code when the app first runs.
+     No invite yet? Join the waitlist above.</small></p>
   <!-- status text is only ever set by JS, so noscript users never see a stale
        "checking…" line; the noscript block below is their whole desktop story -->
   <p class="status" id="desktop-status" hidden></p>
@@ -48,6 +68,17 @@
   <details id="desktop-all" hidden>
     <summary>All platforms</summary>
     <ul id="desktop-list"></ul>
+  </details>
+  <details id="desktop-unsigned" hidden>
+    <summary>&ldquo;Windows protected your PC&rdquo; / &ldquo;Apple could not verify&rdquo;?</summary>
+    <p><small>The beta binary is not code-signed yet (signing lands at public launch), so your
+    OS will warn on first run:</small></p>
+    <ul>
+      <li><small><strong>Windows (SmartScreen):</strong> click <em>More info</em> &rarr; <em>Run anyway</em>.</small></li>
+      <li><small><strong>macOS (Gatekeeper):</strong> right-click the app &rarr; <em>Open</em> &rarr; <em>Open</em>,
+          or allow it under System&nbsp;Settings &rarr; Privacy&nbsp;&amp;&nbsp;Security &rarr; <em>Open&nbsp;Anyway</em>.</small></li>
+    </ul>
+    <p><small>Every release ships a <code>SHA256SUMS</code> file — verify your download against it.</small></p>
   </details>
   <noscript><p class="muted">Direct download links need JavaScript — use the web app or CLI below instead.</p></noscript>
 </div>
@@ -75,6 +106,7 @@
 </div>
 
 <p><small>
+  UNBLOCK, by Kaeva Labs ·
   Source: <a href="https://github.com/Viraj0518/unblock-install">github.com/Viraj0518/unblock-install</a> ·
   CLI releases: <a href="https://github.com/Viraj0518/unblock-install/releases">github.com/Viraj0518/unblock-install/releases</a>
 </small></p>
@@ -143,8 +175,44 @@
     var all = document.getElementById('desktop-all');
     all.hidden = false;
     if (!pick || !d.platforms[pick]) all.open = true;
+    document.getElementById('desktop-unsigned').hidden = false;
   }).catch(function () {
     statusEl.textContent = 'Could not check the desktop build right now — use the web app or the CLI below.';
+  });
+
+  // waitlist signup — progressive enhancement over the plain form POST
+  var form = document.getElementById('waitlist-form');
+  var wlStatus = document.getElementById('waitlist-status');
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var btn = document.getElementById('waitlist-btn');
+    btn.disabled = true;
+    wlStatus.hidden = false;
+    wlStatus.textContent = 'Joining…';
+    fetch('/api/waitlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('waitlist-email').value,
+        website: form.elements.website.value
+      })
+    }).then(function (r) { return r.json().then(function (b) { return { s: r.status, b: b }; }); })
+      .then(function (res) {
+        if (res.b && res.b.ok) {
+          wlStatus.textContent = 'You’re on the list — watch your inbox for an invite.';
+          form.hidden = true;
+        } else if (res.s === 400) {
+          wlStatus.textContent = 'That email doesn’t look right — mind checking it?';
+          btn.disabled = false;
+        } else {
+          wlStatus.textContent = 'The waitlist isn’t taking signups quite yet — please check back shortly.';
+          btn.disabled = false;
+        }
+      })
+      .catch(function () {
+        wlStatus.textContent = 'Could not reach the waitlist right now — please try again in a minute.';
+        btn.disabled = false;
+      });
   });
 })();
 </script>
