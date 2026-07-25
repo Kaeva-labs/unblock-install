@@ -16,7 +16,8 @@
 # Exit codes:
 #   0 success
 #   1 failure
-#   2 already installed (skipped)
+#   2 already installed (skipped — including a concurrent-install race loser
+#     whose box already ended up with a satisfying binary)
 #
 # TODO(v2): cosign signature verification of the release artifact.
 #           For v1 we rely on sha256 checksums + HTTPS to github.com.
@@ -28,7 +29,7 @@ REPO="Kaeva-labs/unblock-install"
 INSTALL_DIR="${UNBLOCK_INSTALL_DIR:-$HOME/.local/bin}"
 BIN_NAME="unblock"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t unblock-install)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap 'rm -rf "$TMP_DIR"; release_lock' EXIT
 
 # ---------- helpers ----------
 log()  { printf '\033[1;36m[unblock-install]\033[0m %s\n' "$*"; }
@@ -144,6 +145,58 @@ add_to_path_rc() {
   warn "open a new shell or run: export PATH=\"$bindir:\$PATH\""
 }
 
+# ---------- concurrency guard ----------
+# A fleet-wide "upgrade now" can land N concurrent installer runs on one box
+# (seen live 2026-07-25: two runs raced one install dir; the loser's mv failed
+# AFTER the winner had already placed the right binary, misreporting a healthy
+# box as a failed install). mkdir is atomic on linux+darwin, so a lock dir
+# serializes the download+swap; a loser that wakes up to a satisfied install
+# is the documented exit-2 case, not a failure.
+LOCK_HELD=0
+LOCK_DIR=""
+acquire_lock() {
+  LOCK_DIR="${INSTALL_DIR}/.unblock-install.lock"
+  tries=0
+  while ! mkdir "$LOCK_DIR" 2>/dev/null; do
+    # Liveness beats age: the holder records its PID; if that process is
+    # gone (kill -0 fails), the lock is stale NOW — no ten-minute wait. The
+    # age check remains as fallback for a lock with no readable pid file.
+    holder_pid="$(cat "${LOCK_DIR}/pid" 2>/dev/null || echo "")"
+    if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
+      warn "removing stale install lock (holder pid ${holder_pid} no longer running): ${LOCK_DIR}"
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+    if [ -z "$holder_pid" ] && [ -n "$(find "$LOCK_DIR" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
+      warn "removing stale install lock (>10 min old, no holder pid): ${LOCK_DIR}"
+      rm -rf "$LOCK_DIR"
+      continue
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -ge 60 ]; then
+      return 1
+    fi
+    log "another install is running (lock ${LOCK_DIR}) — waiting 5s (${tries}/60)"
+    sleep 5
+  done
+  echo "$$" > "${LOCK_DIR}/pid" 2>/dev/null || true
+  LOCK_HELD=1
+  return 0
+}
+release_lock() {
+  if [ "$LOCK_HELD" = 1 ]; then rm -rf "$LOCK_DIR" 2>/dev/null || true; fi
+  LOCK_HELD=0
+}
+
+# True if the binary AT $1 (not whatever PATH resolves — a race loser's PATH
+# may not see the winner's fresh install) already satisfies version $2.
+installed_at_path_satisfies() {
+  bin="$1"; want="$2"
+  [ -x "$bin" ] || return 1
+  cur="$("$bin" --version 2>/dev/null | head -n1 | awk '{print $NF}' || echo "")"
+  [ -n "$cur" ] && ver_ge "$cur" "$want"
+}
+
 # ---------- main ----------
 main() {
   os="$(detect_os)"
@@ -155,6 +208,23 @@ main() {
 
   if check_already_installed "$remote_tag"; then
     log "nothing to do — exit 2 (already installed, skipped)"
+    exit 2
+  fi
+
+  mkdir -p "$INSTALL_DIR"
+  install_path="${INSTALL_DIR}/${BIN_NAME}"
+  if ! acquire_lock; then
+    if installed_at_path_satisfies "$install_path" "$remote_tag"; then
+      log "install lock never freed, but ${install_path} already satisfies ${remote_tag} — already installed (exit 2)"
+      exit 2
+    fi
+    err "another install has held the lock for 5+ minutes and no satisfying binary appeared (${LOCK_DIR})."
+    err "it may be on a very slow download — rerun once it completes, or remove the lock dir if nothing is running: rm -rf '${LOCK_DIR}'"
+    exit 1
+  fi
+  # Another run may have finished while we waited on the lock.
+  if installed_at_path_satisfies "$install_path" "$remote_tag"; then
+    log "a concurrent install already placed ${BIN_NAME} >= ${remote_tag} — nothing to do (exit 2)"
     exit 2
   fi
 
@@ -195,9 +265,23 @@ main() {
     warn "SHA256SUMS not found in release — skipping checksum verify"
   fi
 
-  mkdir -p "$INSTALL_DIR"
-  install_path="${INSTALL_DIR}/${BIN_NAME}"
-  mv "$asset_path" "$install_path"
+  # The target can be mid-execution elsewhere or transiently locked — retry
+  # briefly, then tell the truth: a failed swap over an already-satisfying
+  # binary is the exit-2 case, never a false red on a healthy box.
+  swapped=0
+  for attempt in 1 2 3; do
+    if mv -f "$asset_path" "$install_path" 2>/dev/null; then swapped=1; break; fi
+    warn "binary swap failed (attempt ${attempt}/3) — retrying in 2s"
+    sleep 2
+  done
+  if [ "$swapped" != 1 ]; then
+    if installed_at_path_satisfies "$install_path" "$remote_tag"; then
+      log "swap failed but ${install_path} already satisfies ${remote_tag} (a concurrent install won) — exit 2"
+      exit 2
+    fi
+    err "failed to install to ${install_path} after 3 attempts (target in use?)"
+    exit 1
+  fi
   chmod +x "$install_path"
   log "installed to ${install_path}"
 
