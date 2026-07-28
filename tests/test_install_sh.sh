@@ -73,10 +73,36 @@ start_server() {
   echo "mock server failed to start"; exit 1
 }
 
-# Patch install.sh to point at our mock server
+# Patch install.sh to point at our mock server. Both metadata sources (the
+# install.kaeva.app pointer and the api.github.com fallback) serve the same
+# JSON shape, so both map to the same mock endpoint here.
 patched_install() {
   out="$1"
   sed \
+    -e "s|https://install.kaeva.app/api/cli-latest|http://127.0.0.1:${SERVER_PORT}/api/latest.json|g" \
+    -e "s|https://api.github.com/repos/\${REPO}/releases/latest|http://127.0.0.1:${SERVER_PORT}/api/latest.json|g" \
+    -e "s|https://github.com/\${REPO}/releases/download/\${remote_tag}|http://127.0.0.1:${SERVER_PORT}/dl|g" \
+    "$INSTALL_SH" > "$out"
+  chmod +x "$out"
+}
+
+# Variant: BOTH metadata sources dead (closed port 1 -> instant refusal,
+# curl/wget treat connection-refused as fatal, no retry stall), assets live.
+patched_meta_dead() {
+  out="$1"
+  sed \
+    -e "s|https://install.kaeva.app/api/cli-latest|http://127.0.0.1:1/pointer|g" \
+    -e "s|https://api.github.com/repos/\${REPO}/releases/latest|http://127.0.0.1:1/api|g" \
+    -e "s|https://github.com/\${REPO}/releases/download/\${remote_tag}|http://127.0.0.1:${SERVER_PORT}/dl|g" \
+    "$INSTALL_SH" > "$out"
+  chmod +x "$out"
+}
+
+# Variant: pointer dead, API source live -> exercises the fallback leg.
+patched_pointer_dead() {
+  out="$1"
+  sed \
+    -e "s|https://install.kaeva.app/api/cli-latest|http://127.0.0.1:1/pointer|g" \
     -e "s|https://api.github.com/repos/\${REPO}/releases/latest|http://127.0.0.1:${SERVER_PORT}/api/latest.json|g" \
     -e "s|https://github.com/\${REPO}/releases/download/\${remote_tag}|http://127.0.0.1:${SERVER_PORT}/dl|g" \
     "$INSTALL_SH" > "$out"
@@ -157,6 +183,62 @@ case "$OS" in
     fi
     ;;
 esac
+
+# Restore a clean release: test 3 corrupted the served SHA256SUMS.
+publish_release "v0.2.0" "$OS" "$ARCH"
+
+# ---------- test 5: UNBLOCK_VERSION pin, metadata sources DOWN ----------
+echo "test 5: UNBLOCK_VERSION pin survives dead metadata sources"
+PATCHED_META_DEAD="$TESTDIR/install_meta_dead.sh"
+patched_meta_dead "$PATCHED_META_DEAD"
+FAKE_HOME5="$TESTDIR/home5"
+mkdir -p "$FAKE_HOME5"
+set +e
+HOME="$FAKE_HOME5" PATH="$FAKE_HOME5/.local/bin:/usr/bin:/bin" UNBLOCK_VERSION=v0.2.0 \
+  bash "$PATCHED_META_DEAD" > "$TESTDIR/t5.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] && [ -x "$FAKE_HOME5/.local/bin/unblock" ]; then
+  ok "pinned install succeeds with every metadata endpoint dead"
+else
+  fail "expected rc=0 + binary, got rc=$RC — log:"
+  cat "$TESTDIR/t5.log" | sed 's/^/    /'
+fi
+
+# ---------- test 6: pointer down -> API-source fallback ----------
+echo "test 6: pointer outage falls back to the API source"
+PATCHED_PTR_DEAD="$TESTDIR/install_pointer_dead.sh"
+patched_pointer_dead "$PATCHED_PTR_DEAD"
+FAKE_HOME6="$TESTDIR/home6"
+mkdir -p "$FAKE_HOME6"
+set +e
+HOME="$FAKE_HOME6" PATH="$FAKE_HOME6/.local/bin:/usr/bin:/bin" \
+  bash "$PATCHED_PTR_DEAD" > "$TESTDIR/t6.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] && [ -x "$FAKE_HOME6/.local/bin/unblock" ] \
+   && grep -q "trying next source" "$TESTDIR/t6.log"; then
+  ok "fallback source installs; the failover is stated, not silent"
+else
+  fail "expected rc=0 + binary + 'trying next source', got rc=$RC — log:"
+  cat "$TESTDIR/t6.log" | sed 's/^/    /'
+fi
+
+# ---------- test 7: every metadata source down, no pin ----------
+echo "test 7: all metadata sources down -> honest error + pin hint"
+FAKE_HOME7="$TESTDIR/home7"
+mkdir -p "$FAKE_HOME7"
+set +e
+HOME="$FAKE_HOME7" PATH="$FAKE_HOME7/.local/bin:/usr/bin:/bin" \
+  bash "$PATCHED_META_DEAD" > "$TESTDIR/t7.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 1 ] && grep -q "UNBLOCK_VERSION" "$TESTDIR/t7.log"; then
+  ok "exit 1 and the error teaches the UNBLOCK_VERSION escape hatch"
+else
+  fail "expected rc=1 + UNBLOCK_VERSION hint, got rc=$RC — log:"
+  cat "$TESTDIR/t7.log" | sed 's/^/    /'
+fi
 
 # ---------- summary ----------
 echo

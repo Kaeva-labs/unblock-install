@@ -4,10 +4,19 @@
 # Usage:
 #   curl -sSL install.kaeva.app | sh
 #
+# Env knobs (all optional):
+#   UNBLOCK_VERSION=vX.Y.Z    pin the version to install — skips ALL release-
+#                             metadata resolution (GitHub-API-independent)
+#   UNBLOCK_INSTALL_DIR=DIR   install target (default ~/.local/bin)
+#   UNBLOCK_NO_MODIFY_PATH=1  never touch shell rc files; print advice instead
+#   UNBLOCK_LATEST_URL=URL    override the release-pointer endpoint
+#
 # What it does (idempotent):
 #   1. Detect OS (linux/darwin) + arch (x64/arm64)
-#   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
-#   3. Download latest release artifact from
+#   2. Resolve the version: UNBLOCK_VERSION pin, else the CF-edge-cached
+#      pointer at install.kaeva.app/api/cli-latest, else api.github.com
+#   3. If `unblock` is already on PATH and version >= that, exit 2 (skip);
+#      otherwise download the release artifact from
 #      github.com/Kaeva-labs/unblock-install/releases/latest
 #   4. Verify sha256 against SHA256SUMS published alongside the release
 #   5. Install to $HOME/.local/bin/unblock (chmod +x, prepend to PATH in rc)
@@ -56,6 +65,20 @@ download() {
   fi
 }
 
+# Metadata fetches get their own budget: more retries with real backoff and a
+# hard time cap. An unauthenticated api.github.com call 504s under shared-NAT
+# rate limiting (seen live 4x in a row, 2026-07-28) — the fix is patience plus
+# a second source, not ~4s of retrying and a hard red.
+download_meta() {
+  url="$1"; out="$2"
+  if [ "$DL_CMD" = "curl" ]; then
+    # No --retry-delay: curl then backs off exponentially (1s, 2s, 4s, 8s).
+    curl -fsSL --retry 4 --connect-timeout 5 --max-time 40 -o "$out" "$url"
+  else
+    wget -q --tries=4 --waitretry=2 --timeout=15 -O "$out" "$url"
+  fi
+}
+
 # Hasher: sha256sum (linux) or shasum -a 256 (mac)
 sha256() {
   if have sha256sum; then sha256sum "$1" | awk '{print $1}';
@@ -83,22 +106,49 @@ detect_arch() {
 }
 
 # ---------- remote version ----------
+# Parse "tag_name": "v0.1.0" from a GitHub-shaped JSON body — no jq dependency.
+# Both the install.kaeva.app pointer and api.github.com return this shape.
+parse_tag_name() {
+  grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$1" \
+    | head -n1 | sed 's/.*"\([^"]*\)"$/\1/'
+}
+
 fetch_latest_tag() {
-  # Returns e.g. "v0.1.0"
+  # Version pin: skips ALL metadata resolution, so the install works even
+  # when both metadata sources are down (asset downloads use the release
+  # CDN, not the API). This is the stage/demo escape hatch.
+  if [ -n "${UNBLOCK_VERSION:-}" ]; then
+    case "$UNBLOCK_VERSION" in
+      v*) echo "$UNBLOCK_VERSION" ;;
+      *)  echo "v${UNBLOCK_VERSION}" ;;
+    esac
+    return 0
+  fi
+
+  # Primary: our own CF-fronted, edge-cached pointer — not subject to
+  # api.github.com's unauthenticated 60 req/hr/IP limit (shared across a
+  # whole NAT), which 504-killed live installs on 2026-07-28.
+  # Fallback: api.github.com direct — same JSON shape, same parser, so a
+  # pointer outage can never make an install worse than the old behavior.
+  pointer_url="${UNBLOCK_LATEST_URL:-https://install.kaeva.app/api/cli-latest}"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
   tag_file="${TMP_DIR}/latest.json"
-  if ! download "$api_url" "$tag_file"; then
-    err "failed to fetch latest release metadata from ${api_url}"
-    exit 1
-  fi
-  # Parse "tag_name": "v0.1.0" — no jq dependency
-  tag="$(grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' "$tag_file" \
-        | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
-  if [ -z "$tag" ]; then
-    err "could not parse tag_name from release metadata"
-    exit 1
-  fi
-  echo "$tag"
+  for src in "$pointer_url" "$api_url"; do
+    if download_meta "$src" "$tag_file"; then
+      tag="$(parse_tag_name "$tag_file")"
+      if [ -n "$tag" ]; then echo "$tag"; return 0; fi
+      warn "could not parse tag_name from ${src} — trying next source"
+    else
+      warn "failed to fetch release metadata from ${src} — trying next source"
+    fi
+  done
+  err "could not resolve the latest release from any source:"
+  err "  ${pointer_url}"
+  err "  ${api_url}"
+  err "if this is a network blip, re-run in a minute — or pin a version and"
+  err "skip resolution entirely (releases: github.com/${REPO}/releases):"
+  err "  curl -fsSL https://install.kaeva.app | UNBLOCK_VERSION=vX.Y.Z sh"
+  exit 1
 }
 
 # Strip leading "v" for semver compare
@@ -128,11 +178,19 @@ check_already_installed() {
 }
 
 # ---------- shell rc PATH ----------
+# PATH_HINT_NEEDED=1 means the install dir was NOT already on PATH when we
+# ran — the final banner then prints exact, shell-honest instructions.
+PATH_HINT_NEEDED=0
 add_to_path_rc() {
   bindir="$1"
   case ":$PATH:" in
     *":$bindir:"*) return 0 ;;
   esac
+  PATH_HINT_NEEDED=1
+  if [ -n "${UNBLOCK_NO_MODIFY_PATH:-}" ]; then
+    log "UNBLOCK_NO_MODIFY_PATH set — leaving shell rc files untouched"
+    return 0
+  fi
   line="export PATH=\"$bindir:\$PATH\""
   for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
     [ -f "$rc" ] || continue
@@ -141,7 +199,6 @@ add_to_path_rc() {
       log "added $bindir to PATH in $rc"
     fi
   done
-  warn "open a new shell or run: export PATH=\"$bindir:\$PATH\""
 }
 
 # ---------- main ----------
@@ -203,11 +260,33 @@ main() {
 
   add_to_path_rc "$INSTALL_DIR"
 
+  # PATH truth, not PATH optimism: rc files are read by interactive/login
+  # shells ONLY — the same shell that ran this installer, and any
+  # `bash -c` / CI step / script, will NOT see the binary without the
+  # export (or the full path). Say exactly that.
+  path_block=""
+  if [ "$PATH_HINT_NEEDED" = 1 ]; then
+    if [ -n "${UNBLOCK_NO_MODIFY_PATH:-}" ]; then
+      rc_note="  (Shell rc files were left untouched: UNBLOCK_NO_MODIFY_PATH is set,
+  so EVERY new shell needs that export too.)"
+    else
+      rc_note="  New interactive shells pick it up automatically (added to your
+  shell rc). Scripts, CI, and \`bash -c\` do NOT read rc files — they
+  need the export above, or the full path: ${install_path}"
+    fi
+    path_block="
+  To use it in THIS shell, first run:
+    export PATH=\"${INSTALL_DIR}:\$PATH\"
+
+${rc_note}
+"
+  fi
+
   cat <<EOF
 
 ------------------------------------------------------------
-  unblock ${remote_tag} installed.
-
+  unblock ${remote_tag} installed to ${install_path}
+${path_block}
   Now run:
     unblock login          # sign in -- or create your account
   then:
