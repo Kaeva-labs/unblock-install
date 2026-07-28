@@ -68,7 +68,7 @@ function Get-Arch {
     'AMD64' { return 'x64' }
     'ARM64' { return 'arm64' }
     'x86'   { return 'x64' }   # 32-bit shell on 64-bit OS -- best-effort
-    default { Write-Err "unsupported arch: $a"; exit 1 }
+    default { Write-Err "unsupported arch: $a"; Cleanup; exit 1 }
   }
 }
 
@@ -92,8 +92,8 @@ function Get-LatestTag {
   # when every metadata source is down (asset downloads use the release
   # CDN, not the API). This is the stage/demo escape hatch.
   if ($env:UNBLOCK_VERSION) {
-    $v = $env:UNBLOCK_VERSION
-    if ($v -notmatch '^v') { $v = "v$v" }
+    # Normalize: accept 0.1.7 / v0.1.7 / V0.1.7, emit v0.1.7 (tags are vX.Y.Z).
+    $v = 'v' + ($env:UNBLOCK_VERSION -replace '^[vV]', '')
     Write-Log "using pinned version $v (UNBLOCK_VERSION) -- skipping release metadata"
     return $v
   }
@@ -105,19 +105,26 @@ function Get-LatestTag {
   # pointer outage can never make an install worse than the old behavior.
   $pointerUrl = if ($env:UNBLOCK_LATEST_URL) { $env:UNBLOCK_LATEST_URL } else { 'https://install.kaeva.app/api/cli-latest' }
   $apiUrl     = "https://api.github.com/repos/$Repo/releases/latest"
-  foreach ($url in @($pointerUrl, $apiUrl)) {
-    for ($i = 1; $i -le 3; $i++) {
+  # Per-source budgets: the CF-edge pointer is fast-or-not-at-all (one try,
+  # tight timeout -- a hanging pointer must never stall the install); the
+  # flaky API source gets patience (retries + backoff).
+  $sources = @(
+    @{ Url = $pointerUrl; Attempts = 1; TimeoutSec = 8 },
+    @{ Url = $apiUrl;     Attempts = 3; TimeoutSec = 30 }
+  )
+  foreach ($s in $sources) {
+    for ($i = 1; $i -le $s.Attempts; $i++) {
       try {
-        $json = Invoke-RestMethod -Uri $url -UseBasicParsing -TimeoutSec 30 -Headers @{ 'User-Agent' = 'unblock-install' }
+        $json = Invoke-RestMethod -Uri $s.Url -UseBasicParsing -TimeoutSec $s.TimeoutSec -Headers @{ 'User-Agent' = 'unblock-install' }
         if ($json.tag_name) { return $json.tag_name }
-        Write-Warn "no tag_name in metadata from $url -- trying next source"
+        Write-Warn "no tag_name in metadata from $($s.Url) -- trying next source"
         break
       } catch {
-        if ($i -lt 3) {
-          Write-Warn "metadata fetch failed ($url) attempt $i/3 -- retrying in $(2 * $i)s"
+        if ($i -lt $s.Attempts) {
+          Write-Warn "metadata fetch failed ($($s.Url)) attempt $i/$($s.Attempts) -- retrying in $(2 * $i)s"
           Start-Sleep -Seconds (2 * $i)
         } else {
-          Write-Warn "failed to fetch release metadata from ${url}: $($_.Exception.Message) -- trying next source"
+          Write-Warn "failed to fetch release metadata from $($s.Url): $($_.Exception.Message) -- trying next source"
         }
       }
     }

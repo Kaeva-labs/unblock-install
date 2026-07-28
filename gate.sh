@@ -30,6 +30,16 @@ cd "$HERE"
 # 1. install.sh syntax
 leg "install.sh bash -n" bash -n install.sh
 
+# 1b. POSIX check — the public entrypoint is `curl | sh` (dash on Debian/
+# Ubuntu); bash -n alone does not catch bashisms. LOUD skip when absent;
+# the integration suite (leg below) also RUNS the installer under sh, which
+# covers dash wherever sh IS dash (the ubuntu CI image).
+if command -v dash >/dev/null 2>&1; then
+  leg "install.sh dash -n (POSIX entrypoint)" dash -n install.sh
+else
+  echo "── ⚠️  SKIPPED (LOUD): install.sh dash -n — no dash on this runner."
+fi
+
 # 2. install.ps1 static contracts (node — always runs, even without pwsh)
 leg "install.ps1 static contracts (node)" node -e '
   const fs = require("fs");

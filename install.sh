@@ -66,17 +66,28 @@ download() {
   fi
 }
 
-# Metadata fetches get their own budget: more retries with real backoff and a
-# hard time cap. An unauthenticated api.github.com call 504s under shared-NAT
-# rate limiting (seen live 4x in a row, 2026-07-28) — the fix is patience plus
-# a second source, not ~4s of retrying and a hard red.
+# Metadata fetches get per-source budgets. The pointer is CF-edge-fronted: a
+# healthy answer is sub-second, so it gets ONE fast, hard-capped try — a
+# hanging pointer must never stall the install (≤~15s worst case, then we
+# move on). The API source is the one that 504s transiently under shared-NAT
+# rate limiting (seen live 4x in a row, 2026-07-28) — it gets patience:
+# retries with real backoff, still time-capped. Old behavior was ~4s of
+# retrying, then a hard red.
 download_meta() {
-  url="$1"; out="$2"
+  url="$1"; out="$2"; budget="$3"
   if [ "$DL_CMD" = "curl" ]; then
-    # No --retry-delay: curl then backs off exponentially (1s, 2s, 4s, 8s).
-    curl -fsSL --retry 4 --connect-timeout 5 --max-time 40 -o "$out" "$url"
+    if [ "$budget" = "fast" ]; then
+      curl -fsSL --retry 1 --connect-timeout 5 --max-time 10 --retry-max-time 15 -o "$out" "$url"
+    else
+      # No --retry-delay: curl then backs off exponentially (1s, 2s, 4s, 8s).
+      curl -fsSL --retry 4 --connect-timeout 5 --max-time 40 --retry-max-time 60 -o "$out" "$url"
+    fi
   else
-    wget -q --tries=4 --waitretry=2 --timeout=15 -O "$out" "$url"
+    if [ "$budget" = "fast" ]; then
+      wget -q --tries=1 --timeout=10 -O "$out" "$url"
+    else
+      wget -q --tries=4 --waitretry=2 --timeout=15 -O "$out" "$url"
+    fi
   fi
 }
 
@@ -119,10 +130,9 @@ fetch_latest_tag() {
   # when both metadata sources are down (asset downloads use the release
   # CDN, not the API). This is the stage/demo escape hatch.
   if [ -n "${UNBLOCK_VERSION:-}" ]; then
-    case "$UNBLOCK_VERSION" in
-      v*) echo "$UNBLOCK_VERSION" ;;
-      *)  echo "v${UNBLOCK_VERSION}" ;;
-    esac
+    # Normalize: accept 0.1.7 / v0.1.7 / V0.1.7, emit v0.1.7 (tags are vX.Y.Z).
+    v="${UNBLOCK_VERSION#v}"; v="${v#V}"
+    echo "v${v}"
     return 0
   fi
 
@@ -134,8 +144,10 @@ fetch_latest_tag() {
   pointer_url="${UNBLOCK_LATEST_URL:-https://install.kaeva.app/api/cli-latest}"
   api_url="https://api.github.com/repos/${REPO}/releases/latest"
   tag_file="${TMP_DIR}/latest.json"
-  for src in "$pointer_url" "$api_url"; do
-    if download_meta "$src" "$tag_file"; then
+  # "<budget> <url>" pairs — URLs cannot contain raw spaces, so the split is safe.
+  for attempt in "fast ${pointer_url}" "patient ${api_url}"; do
+    budget="${attempt%% *}"; src="${attempt#* }"
+    if download_meta "$src" "$tag_file" "$budget"; then
       tag="$(parse_tag_name "$tag_file")"
       if [ -n "$tag" ]; then echo "$tag"; return 0; fi
       warn "could not parse tag_name from ${src} — trying next source"
