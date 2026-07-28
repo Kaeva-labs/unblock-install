@@ -3,10 +3,19 @@
 # Usage:
 #   iwr -useb install.kaeva.app | iex
 #
+# Env knobs (all optional):
+#   UNBLOCK_VERSION=vX.Y.Z    pin the version to install -- skips ALL release-
+#                             metadata resolution (GitHub-API-independent)
+#   UNBLOCK_INSTALL_DIR=DIR   install target (default %LOCALAPPDATA%\unblock)
+#   UNBLOCK_NO_MODIFY_PATH=1  never touch the persistent USER PATH
+#   UNBLOCK_LATEST_URL=URL    override the release-pointer endpoint
+#
 # What it does (idempotent):
 #   1. Detect arch (x64/arm64)
-#   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
-#   3. Download latest release artifact from
+#   2. Resolve the version: UNBLOCK_VERSION pin, else the CF-edge-cached
+#      pointer at install.kaeva.app/api/cli-latest, else api.github.com
+#   3. If `unblock` is already on PATH and version >= that, exit 2 (skip);
+#      otherwise download the release artifact from
 #      github.com/Kaeva-labs/unblock-install/releases/latest
 #   4. Verify SHA256 against SHA256SUMS published alongside the release
 #   5. Install to $env:LOCALAPPDATA\unblock\unblock.exe, prepend to USER PATH
@@ -79,19 +88,47 @@ function Compare-Versions {
 }
 
 function Get-LatestTag {
-  $url = "https://api.github.com/repos/$Repo/releases/latest"
-  Write-Log "fetching $url"
-  try {
-    $json = Invoke-RestMethod -Uri $url -UseBasicParsing -Headers @{ 'User-Agent' = 'unblock-install' }
-  } catch {
-    Write-Err "failed to fetch latest release metadata: $_"
-    Cleanup; exit 1
+  # Version pin: skips ALL metadata resolution, so the install works even
+  # when every metadata source is down (asset downloads use the release
+  # CDN, not the API). This is the stage/demo escape hatch.
+  if ($env:UNBLOCK_VERSION) {
+    $v = $env:UNBLOCK_VERSION
+    if ($v -notmatch '^v') { $v = "v$v" }
+    Write-Log "using pinned version $v (UNBLOCK_VERSION) -- skipping release metadata"
+    return $v
   }
-  if (-not $json.tag_name) {
-    Write-Err 'no tag_name in release metadata'
-    Cleanup; exit 1
+
+  # Primary: our own CF-fronted, edge-cached pointer -- not subject to
+  # api.github.com's unauthenticated 60 req/hr/IP limit (shared across a
+  # whole NAT), which 504-killed live installs on 2026-07-28.
+  # Fallback: api.github.com direct -- same JSON shape, one parser, so a
+  # pointer outage can never make an install worse than the old behavior.
+  $pointerUrl = if ($env:UNBLOCK_LATEST_URL) { $env:UNBLOCK_LATEST_URL } else { 'https://install.kaeva.app/api/cli-latest' }
+  $apiUrl     = "https://api.github.com/repos/$Repo/releases/latest"
+  foreach ($url in @($pointerUrl, $apiUrl)) {
+    for ($i = 1; $i -le 3; $i++) {
+      try {
+        $json = Invoke-RestMethod -Uri $url -UseBasicParsing -TimeoutSec 30 -Headers @{ 'User-Agent' = 'unblock-install' }
+        if ($json.tag_name) { return $json.tag_name }
+        Write-Warn "no tag_name in metadata from $url -- trying next source"
+        break
+      } catch {
+        if ($i -lt 3) {
+          Write-Warn "metadata fetch failed ($url) attempt $i/3 -- retrying in $(2 * $i)s"
+          Start-Sleep -Seconds (2 * $i)
+        } else {
+          Write-Warn "failed to fetch release metadata from ${url}: $($_.Exception.Message) -- trying next source"
+        }
+      }
+    }
   }
-  return $json.tag_name
+  Write-Err 'could not resolve the latest release from any source:'
+  Write-Err "  $pointerUrl"
+  Write-Err "  $apiUrl"
+  Write-Err 'if this is a network blip, re-run in a minute -- or pin a version and skip'
+  Write-Err "resolution entirely (releases: github.com/$Repo/releases):"
+  Write-Err '  $env:UNBLOCK_VERSION = "vX.Y.Z"; iwr -useb install.kaeva.app/install.ps1 | iex'
+  Cleanup; exit 1
 }
 
 function Test-AlreadyInstalled {
@@ -111,6 +148,12 @@ function Test-AlreadyInstalled {
 
 function Add-ToUserPath {
   param([string]$Dir)
+  if ($env:UNBLOCK_NO_MODIFY_PATH) {
+    # Patch this session only; the persistent USER PATH stays untouched.
+    if (-not (($env:Path -split ';') -contains $Dir)) { $env:Path = "$Dir;$env:Path" }
+    Write-Log "UNBLOCK_NO_MODIFY_PATH set -- USER PATH left untouched (this session only: $Dir)"
+    return
+  }
   $cur = [Environment]::GetEnvironmentVariable('Path','User')
   if ([string]::IsNullOrEmpty($cur)) { $cur = '' }
   $parts = $cur.Split(';') | Where-Object { $_ -ne '' }
@@ -289,7 +332,16 @@ function Invoke-Install {
 
   Write-Host ''
   Write-Host '------------------------------------------------------------'
-  Write-Host "  unblock $remoteTag installed."
+  Write-Host "  unblock $remoteTag installed to $installPath"
+  Write-Host ''
+  Write-Host '  This PowerShell session can use unblock right now.'
+  if ($env:UNBLOCK_NO_MODIFY_PATH) {
+    Write-Host '  Other and new shells will NOT find it (UNBLOCK_NO_MODIFY_PATH is'
+    Write-Host "  set): add $InstallDir to PATH yourself, or use the full path."
+  } else {
+    Write-Host '  New shells find it via your USER PATH; shells already open'
+    Write-Host '  (including cmd and VS Code terminals) need a restart to see it.'
+  }
   Write-Host ''
   Write-Host '  Now run:'
   Write-Host '    unblock login          # sign in -- or create your account'

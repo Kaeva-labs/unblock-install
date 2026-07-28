@@ -126,12 +126,32 @@ try {
 
   $asset = Publish-Release -Tag 'v0.2.0' -Arch $arch
 
-  # Patch install.ps1 to use the mock server
+  # Patch install.ps1 to use the mock server. Both metadata sources (the
+  # install.kaeva.app pointer and the api.github.com fallback) serve the
+  # same JSON shape, so both map to the same mock endpoint here.
   $patched = Join-Path $TestDir 'install_patched.ps1'
   $src = Get-Content $InstallPs1 -Raw
+  $src = $src -replace 'https://install\.kaeva\.app/api/cli-latest', "http://127.0.0.1:$Port/api/latest.json"
   $src = $src -replace 'https://api\.github\.com/repos/\$Repo/releases/latest', "http://127.0.0.1:$Port/api/latest.json"
   $src = $src -replace 'https://github\.com/\$Repo/releases/download/\$remoteTag', "http://127.0.0.1:$Port/dl"
   Set-Content -Path $patched -Value $src -Encoding UTF8
+
+  # Variant: BOTH metadata sources dead (closed port -> instant refusal),
+  # asset downloads still live.
+  $patchedMetaDead = Join-Path $TestDir 'install_meta_dead.ps1'
+  $src2 = Get-Content $InstallPs1 -Raw
+  $src2 = $src2 -replace 'https://install\.kaeva\.app/api/cli-latest', 'http://127.0.0.1:1/pointer'
+  $src2 = $src2 -replace 'https://api\.github\.com/repos/\$Repo/releases/latest', 'http://127.0.0.1:1/api'
+  $src2 = $src2 -replace 'https://github\.com/\$Repo/releases/download/\$remoteTag', "http://127.0.0.1:$Port/dl"
+  Set-Content -Path $patchedMetaDead -Value $src2 -Encoding UTF8
+
+  # Variant: pointer dead, API source live -> exercises the fallback leg.
+  $patchedPtrDead = Join-Path $TestDir 'install_pointer_dead.ps1'
+  $src3 = Get-Content $InstallPs1 -Raw
+  $src3 = $src3 -replace 'https://install\.kaeva\.app/api/cli-latest', 'http://127.0.0.1:1/pointer'
+  $src3 = $src3 -replace 'https://api\.github\.com/repos/\$Repo/releases/latest', "http://127.0.0.1:$Port/api/latest.json"
+  $src3 = $src3 -replace 'https://github\.com/\$Repo/releases/download/\$remoteTag', "http://127.0.0.1:$Port/dl"
+  Set-Content -Path $patchedPtrDead -Value $src3 -Encoding UTF8
 
   # ---------- test 1: fresh install ----------
   Write-Host 'test 1: fresh install'
@@ -167,6 +187,66 @@ try {
     Ok 'bad checksum exits 1 with mismatch message'
   } else {
     Bad "expected rc=1 + 'sha256 mismatch', got rc=$rc"
+    Write-Host $log
+  }
+
+  # Restore a clean release: test 2 corrupted the served SHA256SUMS.
+  $asset = Publish-Release -Tag 'v0.2.0' -Arch $arch
+
+  # ---------- test 3: UNBLOCK_VERSION pin, metadata sources DOWN ----------
+  Write-Host 'test 3: UNBLOCK_VERSION pin survives dead metadata sources'
+  $home3 = Join-Path $TestDir 'home3'
+  New-Item -ItemType Directory -Force $home3 | Out-Null
+  $env:LOCALAPPDATA = Join-Path $home3 'AppData\Local'
+  $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
+  $env:UNBLOCK_VERSION = 'v0.2.0'
+  try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $patchedMetaDead *> (Join-Path $TestDir 't3.log')
+    $rc = $LASTEXITCODE
+  } catch { $rc = 99 }
+  Remove-Item Env:UNBLOCK_VERSION -ErrorAction SilentlyContinue
+  $installed = Join-Path $env:UNBLOCK_INSTALL_DIR 'unblock.exe'
+  if ($rc -eq 0 -and (Test-Path $installed)) {
+    Ok 'pinned install succeeds with every metadata endpoint dead'
+  } else {
+    Bad "expected rc=0 + binary, got rc=$rc, exists=$(Test-Path $installed)"
+    Get-Content (Join-Path $TestDir 't3.log') | ForEach-Object { Write-Host "    $_" }
+  }
+
+  # ---------- test 4: pointer down -> API-source fallback ----------
+  Write-Host 'test 4: pointer outage falls back to the API source'
+  $home4 = Join-Path $TestDir 'home4'
+  New-Item -ItemType Directory -Force $home4 | Out-Null
+  $env:LOCALAPPDATA = Join-Path $home4 'AppData\Local'
+  $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
+  try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $patchedPtrDead *> (Join-Path $TestDir 't4.log')
+    $rc = $LASTEXITCODE
+  } catch { $rc = 99 }
+  $installed = Join-Path $env:UNBLOCK_INSTALL_DIR 'unblock.exe'
+  $log = Get-Content (Join-Path $TestDir 't4.log') -Raw
+  if ($rc -eq 0 -and (Test-Path $installed) -and $log -match 'trying next source') {
+    Ok 'fallback source installs; the failover is stated, not silent'
+  } else {
+    Bad "expected rc=0 + binary + 'trying next source', got rc=$rc"
+    Write-Host $log
+  }
+
+  # ---------- test 5: every metadata source down, no pin ----------
+  Write-Host 'test 5: all metadata sources down -> honest error + pin hint'
+  $home5 = Join-Path $TestDir 'home5'
+  New-Item -ItemType Directory -Force $home5 | Out-Null
+  $env:LOCALAPPDATA = Join-Path $home5 'AppData\Local'
+  $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
+  try {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $patchedMetaDead *> (Join-Path $TestDir 't5.log')
+    $rc = $LASTEXITCODE
+  } catch { $rc = 99 }
+  $log = Get-Content (Join-Path $TestDir 't5.log') -Raw
+  if ($rc -eq 1 -and $log -match 'UNBLOCK_VERSION') {
+    Ok 'exit 1 and the error teaches the UNBLOCK_VERSION escape hatch'
+  } else {
+    Bad "expected rc=1 + UNBLOCK_VERSION hint, got rc=$rc"
     Write-Host $log
   }
 

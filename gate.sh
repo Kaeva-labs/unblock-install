@@ -60,10 +60,11 @@ else
   echo "──     is filed with unblock_ci; until then Windows-side coverage runs on dev boxes only."
 fi
 
-# 4-6. node suites (pure node, no network, no CF runtime)
+# 4-6b. node suites (pure node, no network, no CF runtime)
 leg "desktop asset matcher suite" node tests/test_desktop_api.mjs
 leg "feed schema + sig-verify suite" node tests/test_feed.mjs
 leg "waitlist handler suite" node tests/test_waitlist_api.mjs
+leg "cli-latest release-pointer suite" node tests/test_cli_latest.mjs
 
 # 7. install.sh integration suite (mock server, temp HOME)
 leg "install.sh integration suite" bash tests/test_install_sh.sh
