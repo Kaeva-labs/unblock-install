@@ -15,7 +15,8 @@
 # Exit codes (via $LASTEXITCODE / exit):
 #   0 success
 #   1 failure
-#   2 already installed (skipped)
+#   2 already installed (skipped — including a concurrent-install race loser
+#     whose box already ended up with a satisfying binary)
 #
 # TODO(v2): cosign / Windows Authenticode signature verification.
 #           For v1 we rely on SHA256 checksums + HTTPS to github.com.
@@ -28,6 +29,9 @@ $BinName     = 'unblock.exe'
 $InstallDir  = if ($env:UNBLOCK_INSTALL_DIR) { $env:UNBLOCK_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'unblock' }
 $TmpDir      = Join-Path ([System.IO.Path]::GetTempPath()) ("unblock-install-" + [System.Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
+$LockFile    = Join-Path $InstallDir '.unblock-install.lock'
+$script:LockHeld = $false
+$script:LockStream = $null
 
 # Force TLS 1.2 for older PowerShell 5.1 hosts
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
@@ -37,7 +41,14 @@ function Write-Log  { param([string]$m) Write-Host "[unblock-install] $m" -Foreg
 function Write-Warn { param([string]$m) Write-Host "[unblock-install] $m" -ForegroundColor Yellow }
 function Write-Err  { param([string]$m) Write-Host "[unblock-install] $m" -ForegroundColor Red }
 
-function Cleanup { if (Test-Path $TmpDir) { Remove-Item -Recurse -Force -Path $TmpDir -ErrorAction SilentlyContinue } }
+function Cleanup {
+  if (Test-Path $TmpDir) { Remove-Item -Recurse -Force -Path $TmpDir -ErrorAction SilentlyContinue }
+  if ($script:LockHeld) {
+    try { $script:LockStream.Close() } catch {}
+    Remove-Item -Force -Path $LockFile -ErrorAction SilentlyContinue
+    $script:LockHeld = $false
+  }
+}
 
 function Test-Command { param([string]$Name) [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 
@@ -119,6 +130,57 @@ function Get-Sha256 {
   return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLower()
 }
 
+function Test-InstalledAtPath {
+  # Checks the binary AT the install path (not whatever PATH resolves — a race
+  # loser's session PATH may not see the winner's fresh install).
+  param([string]$Path, [string]$RemoteTag)
+  if (-not (Test-Path $Path)) { return $false }
+  $cur = $null
+  try { $cur = (& $Path --version 2>$null | Select-Object -First 1).Split(' ')[-1] } catch {}
+  if ([string]::IsNullOrWhiteSpace($cur)) { return $false }
+  return ((Compare-Versions -a $cur -b $RemoteTag) -ge 0)
+}
+
+function Get-InstallLock {
+  # A fleet-wide "upgrade now" can land N concurrent installer runs on one box
+  # (seen live 2026-07-25: two runs raced one install dir; the loser failed
+  # AFTER the winner had already placed the right binary, misreporting a
+  # healthy box as a failed install). NOTE: New-Item -ItemType Directory is
+  # NOT atomic (the cmdlet exists-checks, then calls the idempotent
+  # Directory.CreateDirectory -- two processes can both "create" it; proven
+  # by a live 7ms race). FileMode::CreateNew IS atomic at the OS level, and
+  # holding the handle (FileShare::None) means a LIVE holder also defeats
+  # stale-reclaim deletion; only a dead holder's lock can be removed.
+  for ($try = 1; $try -le 60; $try++) {
+    try {
+      $script:LockStream = [System.IO.File]::Open($LockFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+      $script:LockHeld = $true
+      return $true
+    } catch [System.IO.IOException] {
+      # Distinguish a LIVE holder (its open FileShare::None handle makes our
+      # probe fail with a sharing violation -> keep waiting) from a DEAD one
+      # (handle gone -> probe opens -> the lock is stale NOW, no age wait).
+      $holderAlive = $false
+      try {
+        $probe = [System.IO.File]::Open($LockFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $probe.Close()
+      } catch [System.IO.FileNotFoundException] {
+        continue
+      } catch [System.IO.IOException] {
+        $holderAlive = $true
+      }
+      if (-not $holderAlive) {
+        Write-Warn "removing stale install lock (holder no longer running): $LockFile"
+        Remove-Item -Force -Path $LockFile -ErrorAction SilentlyContinue
+        continue
+      }
+      Write-Log "another install is running (lock $LockFile) -- waiting 5s ($try/60)"
+      Start-Sleep -Seconds 5
+    }
+  }
+  return $false
+}
+
 # ---------- main ----------
 function Invoke-Install {
   $arch = Get-Arch
@@ -129,6 +191,23 @@ function Invoke-Install {
 
   if (Test-AlreadyInstalled -RemoteTag $remoteTag) {
     Write-Log "nothing to do -- exit 2 (already installed, skipped)"
+    Cleanup; exit 2
+  }
+
+  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+  $installPath = Join-Path $InstallDir $BinName
+  if (-not (Get-InstallLock)) {
+    if (Test-InstalledAtPath -Path $installPath -RemoteTag $remoteTag) {
+      Write-Log "install lock never freed, but $installPath already satisfies $remoteTag -- already installed (exit 2)"
+      Cleanup; exit 2
+    }
+    Write-Err "another install has held the lock for 5+ minutes and no satisfying binary appeared ($LockFile)."
+    Write-Err "it may be on a very slow download -- rerun once it completes, or remove the lock file if nothing is running."
+    Cleanup; exit 1
+  }
+  # Another run may have finished while we waited on the lock.
+  if (Test-InstalledAtPath -Path $installPath -RemoteTag $remoteTag) {
+    Write-Log "a concurrent install already placed $BinName >= $remoteTag -- nothing to do (exit 2)"
     Cleanup; exit 2
   }
 
@@ -182,9 +261,28 @@ function Invoke-Install {
     }
   }
 
-  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  $installPath = Join-Path $InstallDir $BinName
-  Move-Item -Force -Path $assetPath -Destination $installPath
+  # The target can be mid-execution or transiently locked -- retry briefly,
+  # then tell the truth: a failed swap over an already-satisfying binary is
+  # the exit-2 case, never a false red on a healthy box.
+  $swapped = $false
+  foreach ($attempt in 1..3) {
+    try {
+      Move-Item -Force -Path $assetPath -Destination $installPath -ErrorAction Stop
+      $swapped = $true
+      break
+    } catch {
+      Write-Warn "binary swap failed (attempt $attempt/3): $($_.Exception.Message) -- retrying in 2s"
+      Start-Sleep -Seconds 2
+    }
+  }
+  if (-not $swapped) {
+    if (Test-InstalledAtPath -Path $installPath -RemoteTag $remoteTag) {
+      Write-Log "swap failed but $installPath already satisfies $remoteTag (a concurrent install won) -- exit 2"
+      Cleanup; exit 2
+    }
+    Write-Err "failed to install to $installPath after 3 attempts (binary in use?)"
+    Cleanup; exit 1
+  }
   Write-Log "installed to $installPath"
 
   Add-ToUserPath -Dir $InstallDir
