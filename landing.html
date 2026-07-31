@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>install.kaeva.app</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="UNBLOCK CLI installer. curl -sSL install.kaeva.app | sh">
+<meta name="description" content="Download the UNBLOCK desktop app for macOS, or install the UNBLOCK CLI: curl -sSL install.kaeva.app | sh">
 <!--
   This page is only ever rendered to humans hitting install.kaeva.app in a browser.
   Shell/PowerShell pipes are served directly via Cloudflare Pages routing rules
@@ -18,15 +18,55 @@
   body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
          max-width: 720px; margin: 6em auto; padding: 0 1.5em; }
   h1 { font-weight: 600; letter-spacing: -.02em; }
+  h2 { font-weight: 600; letter-spacing: -.02em; font-size: 1.2em; margin: 2.6em 0 .6em; }
   pre { background: rgba(127,127,127,.12); padding: 1em 1.2em; border-radius: 8px; overflow-x: auto; }
   code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
   a { color: #4a8cff; }
   small { opacity: .65; }
+  .primary { border: 1px solid rgba(127,127,127,.3); border-radius: 12px;
+             padding: 1.6em; margin: 1.6em 0 0; }
+  .primary h2 { margin-top: 0; }
+  .download { display: inline-block; background: #4a8cff; color: #fff; text-decoration: none;
+              font-weight: 600; padding: .85em 1.5em; border-radius: 8px; }
+  .download:hover, .download:focus { background: #3a7ae0; }
+  .meta { margin: .9em 0 0; }
 </style>
 </head>
 <body>
 <h1>install.kaeva.app</h1>
-<p>Installer for the <strong>UNBLOCK</strong> CLI.</p>
+<p>Get <strong>UNBLOCK</strong> — the desktop app for people, the CLI for agents and scripts.</p>
+
+<div class="primary">
+<h2>Desktop app — macOS (Apple Silicon)</h2>
+<!--
+  NOTE — this link is TAG-PINNED on purpose, and must be bumped on every
+  desktop release.
+
+  Desktop releases are published to this repo under a `desktop-v*` tag with
+  `--latest=false`, so GitHub's `releases/latest` pointer keeps resolving to
+  the CLI release. install.sh and install.ps1 read that pointer and then
+  download `unblock-<os>-<arch>` from whatever tag it names — a desktop
+  release marked "Latest" would break `curl -sSL install.kaeva.app | sh` for
+  everyone. That is why there is deliberately no "latest desktop" URL to
+  link to here.
+-->
+<p><a class="download" href="https://github.com/Kaeva-labs/unblock-install/releases/download/desktop-v0.1.0/unblock-desktop-darwin-arm64.dmg">Download UNBLOCK for macOS</a></p>
+<p class="meta"><small>
+  Apple Silicon (M1 and later) · <code>.dmg</code> · open it and drag
+  <strong>UNBLOCK</strong> to your Applications folder.
+</small></p>
+<p class="meta"><small>
+  <strong>Reinstalling never touches your <code>~/.unblock</code> data</strong> —
+  your identity, comms, and saved state are preserved. Installing over an
+  existing copy replaces the app itself and nothing else.
+</small></p>
+<p class="meta"><small>
+  Intel Macs, Windows and Linux desktop builds are not published yet — use the CLI below.
+  All releases: <a href="https://github.com/Kaeva-labs/unblock-install/releases">github.com/Kaeva-labs/unblock-install/releases</a>
+</small></p>
+</div>
+
+<h2>CLI — for agents, servers and power users</h2>
 
 <h3>Linux &amp; macOS</h3>
 <pre><code>curl -sSL install.kaeva.app | sh</code></pre>
@@ -42,8 +82,8 @@
 </small></p>
 
 <p><small>
-  Source: <a href="https://github.com/Viraj0518/unblock-install">github.com/Viraj0518/unblock-install</a> ·
-  CLI releases: <a href="https://github.com/Viraj0518/unblock-install/releases">github.com/Viraj0518/unblock-install/releases</a>
+  Source: <a href="https://github.com/Kaeva-labs/unblock-install">github.com/Kaeva-labs/unblock-install</a> ·
+  CLI releases: <a href="https://github.com/Kaeva-labs/unblock-install/releases/latest">github.com/Kaeva-labs/unblock-install/releases/latest</a>
 </small></p>
 </body>
 </html>
