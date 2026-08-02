@@ -18,8 +18,9 @@
 #   1 failure
 #   2 already installed (skipped)
 #
-# TODO(v2): cosign signature verification of the release artifact.
-#           For v1 we rely on sha256 checksums + HTTPS to github.com.
+# Signature verification: release artifacts are checked via sha256
+# checksums (see below) delivered over HTTPS to github.com. Cryptographic
+# artifact signing is not yet implemented.
 
 set -eu
 

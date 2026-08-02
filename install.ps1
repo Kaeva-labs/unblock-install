@@ -17,8 +17,9 @@
 #   1 failure
 #   2 already installed (skipped)
 #
-# TODO(v2): cosign / Windows Authenticode signature verification.
-#           For v1 we rely on SHA256 checksums + HTTPS to github.com.
+# Signature verification: release artifacts are checked via SHA256
+# checksums (see below) delivered over HTTPS to github.com. Cryptographic
+# artifact signing is not yet implemented.
 
 $ErrorActionPreference = 'Stop'
 
