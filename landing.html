@@ -2,48 +2,233 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>install.kaeva.app</title>
+<title>Get UNBLOCK — by Kaeva Labs</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="UNBLOCK CLI installer. curl -sSL install.kaeva.app | sh">
+<meta name="description" content="Get UNBLOCK (by Kaeva Labs): join the beta waitlist, download the desktop app, use the web app, or install the CLI.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!--
   This page is only ever rendered to humans hitting install.kaeva.app in a browser.
-  Shell/PowerShell pipes are served directly via Cloudflare Pages routing rules
-  in `_redirects`:
-    /         -> /install.sh  (302) when Accept does NOT include text/html
-    /install.sh   -> raw file
-    /install.ps1  -> raw file
+  Shell/PowerShell pipes never see it: functions/index.js content-negotiates `/`
+  (no Accept: text/html -> install.sh; PowerShell UA or ?ps1=1 -> install.ps1).
+  Desktop download links come from /api/desktop (functions/api/desktop.js), which
+  resolves the latest desktop release server-side and is edge-cached.
 -->
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: light dark; --accent: #4a8cff; --line: rgba(127,127,127,.25); }
   body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         max-width: 720px; margin: 6em auto; padding: 0 1.5em; }
-  h1 { font-weight: 600; letter-spacing: -.02em; }
-  pre { background: rgba(127,127,127,.12); padding: 1em 1.2em; border-radius: 8px; overflow-x: auto; }
+         max-width: 720px; margin: 4em auto 6em; padding: 0 1.5em; }
+  h1 { font-weight: 600; letter-spacing: -.02em; margin-bottom: .2em; }
+  .tag { opacity: .75; margin-top: 0; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 1.1em 1.3em; margin: 1.2em 0; }
+  .card h2 { font-size: 1.05em; font-weight: 600; margin: 0 0 .5em; }
+  .btn { display: inline-block; background: var(--accent); color: #fff; text-decoration: none;
+         padding: .55em 1.1em; border-radius: 8px; font-weight: 600; }
+  .btn:hover { filter: brightness(1.08); }
+  .btn.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  pre { background: rgba(127,127,127,.12); padding: 1em 1.2em; border-radius: 8px; overflow-x: auto; margin: .6em 0; }
   code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
-  a { color: #4a8cff; }
-  small { opacity: .65; }
+  a { color: var(--accent); }
+  small, .muted { opacity: .65; }
+  details { margin-top: .6em; }
+  details ul { margin: .5em 0 0; padding-left: 1.2em; }
+  details li { margin: .25em 0; }
+  .status { opacity: .8; }
+  .row { display: flex; gap: .6em; flex-wrap: wrap; }
+  /* the hidden attribute must beat .row's display:flex (UA [hidden] style loses
+     to any author display rule — without this the "hide form on success" is a no-op) */
+  [hidden] { display: none !important; }
+  input[type=email] { flex: 1 1 14em; font: inherit; padding: .5em .8em; border: 1px solid var(--line);
+         border-radius: 8px; background: transparent; color: inherit; min-width: 0; }
+  button.btn { border: 0; cursor: pointer; font: inherit; }
+  .hp { position: absolute; left: -9999px; opacity: 0; height: 0; width: 0; }
 </style>
 </head>
 <body>
-<h1>install.kaeva.app</h1>
-<p>Installer for the <strong>UNBLOCK</strong> CLI.</p>
+<h1>Get UNBLOCK</h1>
+<p class="tag">One living memory your humans and agents read, write, and inherit.</p>
 
-<h3>Linux &amp; macOS</h3>
-<pre><code>curl -sSL install.kaeva.app | sh</code></pre>
+<div class="card">
+  <h2>Join the beta</h2>
+  <p>UNBLOCK is in an invite-gated beta — invites go out in waves as capacity opens.
+     Join the waitlist and we&rsquo;ll send yours.</p>
+  <!-- no-JS: hide the form (a raw form POST would land on a bare JSON response)
+       and say so honestly instead -->
+  <noscript><style>#waitlist-form { display: none; }</style>
+    <p class="muted">The waitlist form needs JavaScript enabled.</p>
+  </noscript>
+  <form id="waitlist-form" class="row" method="post" action="/api/waitlist">
+    <input type="email" name="email" id="waitlist-email" placeholder="you@company.com"
+           required autocomplete="email" aria-label="Email address">
+    <input type="text" name="website" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <button class="btn" type="submit" id="waitlist-btn">Join the waitlist</button>
+  </form>
+  <p class="status" id="waitlist-status" hidden></p>
+</div>
 
-<h3>Windows (PowerShell)</h3>
-<pre><code>iwr -useb install.kaeva.app/install.ps1 | iex</code></pre>
+<div class="card" id="desktop-card">
+  <h2>Desktop app <span class="muted" style="font-weight:400">— have an invite?</span></h2>
+  <!-- only rendered once a downloadable build actually exists; while the desktop
+       status says "final assembly" this claim would contradict it -->
+  <p id="desktop-invite-note" hidden><small>The download is open; you&rsquo;ll need your invite code
+     when the app first runs. No invite yet? Join the waitlist above.</small></p>
+  <!-- status text is only ever set by JS, so noscript users never see a stale
+       "checking…" line; the noscript block below is their whole desktop story -->
+  <p class="status" id="desktop-status" hidden></p>
+  <p id="desktop-cta" hidden><a class="btn" id="desktop-btn" href="#">Download</a>
+     <span class="muted" id="desktop-version"></span></p>
+  <details id="desktop-all" hidden>
+    <summary>All platforms</summary>
+    <ul id="desktop-list"></ul>
+  </details>
+  <details id="desktop-unsigned" hidden>
+    <summary>&ldquo;Windows protected your PC&rdquo; / &ldquo;Apple could not verify&rdquo;?</summary>
+    <p><small>The beta binary is not code-signed yet, so Windows and macOS will warn on first run:</small></p>
+    <ul>
+      <li><small><strong>Windows (SmartScreen):</strong> click <em>More info</em> &rarr; <em>Run anyway</em>.</small></li>
+      <li><small><strong>macOS (Gatekeeper):</strong> right-click the app &rarr; <em>Open</em> &rarr; <em>Open</em>,
+          or allow it under System&nbsp;Settings &rarr; Privacy&nbsp;&amp;&nbsp;Security &rarr; <em>Open&nbsp;Anyway</em>.</small></li>
+    </ul>
+    <p><small>Every release publishes SHA-256 checksums alongside the installer — verify your download against them.</small></p>
+  </details>
+  <noscript><p class="muted">Direct download links need JavaScript — use the web app or CLI below instead.</p></noscript>
+</div>
+
+<div class="card">
+  <h2>Web app</h2>
+  <p><a class="btn ghost" href="https://app.kaeva.app">Open app.kaeva.app</a></p>
+  <p><small>Runs in any browser — nothing to download. To keep it like a native app,
+  use your browser&rsquo;s <em>Install</em> option (address-bar icon in Chrome/Edge,
+  Share&nbsp;&rarr;&nbsp;Add&nbsp;to&nbsp;Home&nbsp;Screen on iOS).</small></p>
+</div>
+
+<div class="card">
+  <h2>CLI</h2>
+  <p><strong>Linux &amp; macOS</strong></p>
+  <pre><code>curl -sSL install.kaeva.app | sh</code></pre>
+  <p><strong>Windows (PowerShell)</strong></p>
+  <pre><code>iwr -useb install.kaeva.app/install.ps1 | iex</code></pre>
+  <p><small>
+    <strong>Reinstalling or upgrading is safe.</strong> The installer only places the
+    <code>unblock</code> binary on your PATH — it never touches your
+    <code>~/.unblock</code> data, so your identity, comms, and saved state are
+    preserved across reinstalls.
+  </small></p>
+</div>
 
 <p><small>
-  <strong>Reinstalling or upgrading is safe.</strong> The installer only places the
-  <code>unblock</code> binary on your PATH — it never touches your
-  <code>~/.unblock</code> data, so your identity, comms, and saved state are
-  preserved across reinstalls.
+  UNBLOCK, by Kaeva Labs ·
+  Source: <a href="https://github.com/Kaeva-labs/unblock-install">github.com/Kaeva-labs/unblock-install</a> ·
+  CLI releases: <a href="https://github.com/Kaeva-labs/unblock-install/releases">github.com/Kaeva-labs/unblock-install/releases</a>
 </small></p>
 
-<p><small>
-  Source: <a href="https://github.com/Viraj0518/unblock-install">github.com/Viraj0518/unblock-install</a> ·
-  CLI releases: <a href="https://github.com/Viraj0518/unblock-install/releases">github.com/Viraj0518/unblock-install/releases</a>
-</small></p>
+<script>
+(function () {
+  var LABELS = {
+    'windows-x64':  'Windows',
+    'windows-arm64':'Windows (ARM)',
+    'macos-arm64':  'macOS (Apple Silicon)',
+    'macos-x64':    'macOS (Intel)',
+    'linux-x64':    'Linux',
+    'linux-arm64':  'Linux (ARM64)'
+  };
+  function detect() {
+    var ua = (navigator.userAgent || '').toLowerCase();
+    // phones/tablets first: iOS UAs contain "mac os x" and Android UAs contain
+    // "linux" — without this they'd be offered a desktop binary they can't run.
+    // (The web app card is their path.)
+    if (/iphone|ipad|ipod|android|mobile/.test(ua)) return null;
+    var arm = /arm64|aarch64/.test(ua);
+    if (ua.indexOf('windows') !== -1) return arm ? 'windows-arm64' : 'windows-x64';
+    // Mac arch is not reliably exposed to the browser; default Apple Silicon,
+    // the "All platforms" list carries the Intel build.
+    if (ua.indexOf('mac os') !== -1 || ua.indexOf('macintosh') !== -1) return 'macos-arm64';
+    if (ua.indexOf('linux') !== -1 || ua.indexOf('x11') !== -1) return arm ? 'linux-arm64' : 'linux-x64';
+    return null;
+  }
+  var statusEl = document.getElementById('desktop-status');
+  statusEl.hidden = false;
+  statusEl.textContent = 'Checking the latest desktop build…';
+  fetch('/api/desktop').then(function (r) { return r.json(); }).then(function (d) {
+    if (!d.available || !d.platforms || !Object.keys(d.platforms).length) {
+      statusEl.textContent = 'The desktop app is in final assembly — not downloadable yet. ' +
+        'Use the web app or the CLI below today.';
+      return;
+    }
+    var keys = Object.keys(d.platforms);
+    var pick = detect();
+    if (pick && !d.platforms[pick]) {
+      // sibling arch within the SAME OS only — never a cross-OS guess
+      var os = pick.split('-')[0];
+      pick = keys.filter(function (k) { return k.indexOf(os) === 0; })[0] || null;
+    }
+    if (pick && d.platforms[pick]) {
+      var a = d.platforms[pick];
+      var btn = document.getElementById('desktop-btn');
+      btn.href = a.url;
+      btn.textContent = 'Download for ' + (LABELS[pick] || pick);
+      document.getElementById('desktop-version').textContent = d.version || '';
+      statusEl.hidden = true;
+      document.getElementById('desktop-cta').hidden = false;
+    } else {
+      // unknown OS or mobile: no guessed primary button — offer the list
+      statusEl.textContent = 'Desktop build ' + (d.version || '') + ' — pick your platform:';
+    }
+    var list = document.getElementById('desktop-list');
+    keys.forEach(function (k) {
+      var li = document.createElement('li');
+      var link = document.createElement('a');
+      link.href = d.platforms[k].url;
+      link.textContent = (LABELS[k] || k) + ' — ' + d.platforms[k].name;
+      li.appendChild(link);
+      list.appendChild(li);
+    });
+    var all = document.getElementById('desktop-all');
+    all.hidden = false;
+    if (!pick || !d.platforms[pick]) all.open = true;
+    document.getElementById('desktop-unsigned').hidden = false;
+    document.getElementById('desktop-invite-note').hidden = false;
+  }).catch(function () {
+    statusEl.textContent = 'Could not check the desktop build right now — use the web app or the CLI below.';
+  });
+
+  // waitlist signup — progressive enhancement over the plain form POST
+  var form = document.getElementById('waitlist-form');
+  var wlStatus = document.getElementById('waitlist-status');
+  form.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var btn = document.getElementById('waitlist-btn');
+    btn.disabled = true;
+    wlStatus.hidden = false;
+    wlStatus.textContent = 'Joining…';
+    // deliberately does NOT send the honeypot field: aggressive browser
+    // autofill can fill the hidden input, and forwarding it would quiet-drop
+    // a real person with a fake success. The honeypot guards raw form POSTs
+    // (bots); this JS path is human-driven by construction.
+    fetch('/api/waitlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('waitlist-email').value
+      })
+    }).then(function (r) { return r.json().then(function (b) { return { s: r.status, b: b }; }); })
+      .then(function (res) {
+        if (res.b && res.b.ok) {
+          wlStatus.textContent = 'You’re on the list — watch your inbox for an invite.';
+          form.hidden = true;
+        } else if (res.s === 400) {
+          wlStatus.textContent = 'That email doesn’t look right — mind checking it?';
+          btn.disabled = false;
+        } else {
+          wlStatus.textContent = 'The waitlist isn’t taking signups quite yet — please check back shortly.';
+          btn.disabled = false;
+        }
+      })
+      .catch(function () {
+        wlStatus.textContent = 'Could not reach the waitlist right now — please try again in a minute.';
+        btn.disabled = false;
+      });
+  });
+})();
+</script>
 </body>
 </html>

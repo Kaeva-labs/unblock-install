@@ -1,0 +1,8 @@
+{
+  "name": "unblock-install",
+  "private": true,
+  "description": "install.kaeva.app — UNBLOCK installers, download page, and update feed. package.json exists ONLY to expose the repo-gate acceptance script; no dependencies, no build step (CF Pages deploys this repo static + functions as-is).",
+  "scripts": {
+    "gate": "bash gate.sh"
+  }
+}

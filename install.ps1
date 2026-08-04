@@ -3,11 +3,20 @@
 # Usage:
 #   iwr -useb install.kaeva.app | iex
 #
+# Env knobs (all optional):
+#   UNBLOCK_VERSION=vX.Y.Z    pin the version to install -- skips ALL release-
+#                             metadata resolution (GitHub-API-independent)
+#   UNBLOCK_INSTALL_DIR=DIR   install target (default %LOCALAPPDATA%\unblock)
+#   UNBLOCK_NO_MODIFY_PATH=1  never touch the persistent USER PATH
+#   UNBLOCK_LATEST_URL=URL    override the release-pointer endpoint
+#
 # What it does (idempotent):
 #   1. Detect arch (x64/arm64)
-#   2. If `unblock` is already on PATH and version >= remote latest, exit 2 (skip)
-#   3. Download latest release artifact from
-#      github.com/Viraj0518/unblock-install/releases/latest
+#   2. Resolve the version: UNBLOCK_VERSION pin, else the CF-edge-cached
+#      pointer at install.kaeva.app/api/cli-latest, else api.github.com
+#   3. If `unblock` is already on PATH and version >= that, exit 2 (skip);
+#      otherwise download the release artifact from
+#      github.com/Kaeva-labs/unblock-install/releases/latest
 #   4. Verify SHA256 against SHA256SUMS published alongside the release
 #   5. Install to $env:LOCALAPPDATA\unblock\unblock.exe, prepend to USER PATH
 #   6. Print onboarding hint
@@ -15,7 +24,8 @@
 # Exit codes (via $LASTEXITCODE / exit):
 #   0 success
 #   1 failure
-#   2 already installed (skipped)
+#   2 already installed (skipped — including a concurrent-install race loser
+#     whose box already ended up with a satisfying binary)
 #
 # Signature verification: release artifacts are checked via SHA256
 # checksums (see below) delivered over HTTPS to github.com. Cryptographic
@@ -24,11 +34,14 @@
 $ErrorActionPreference = 'Stop'
 
 # ---------- config ----------
-$Repo        = 'Viraj0518/unblock-install'
+$Repo        = 'Kaeva-labs/unblock-install'
 $BinName     = 'unblock.exe'
 $InstallDir  = if ($env:UNBLOCK_INSTALL_DIR) { $env:UNBLOCK_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'unblock' }
 $TmpDir      = Join-Path ([System.IO.Path]::GetTempPath()) ("unblock-install-" + [System.Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $TmpDir | Out-Null
+$LockFile    = Join-Path $InstallDir '.unblock-install.lock'
+$script:LockHeld = $false
+$script:LockStream = $null
 
 # Force TLS 1.2 for older PowerShell 5.1 hosts
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
@@ -38,7 +51,14 @@ function Write-Log  { param([string]$m) Write-Host "[unblock-install] $m" -Foreg
 function Write-Warn { param([string]$m) Write-Host "[unblock-install] $m" -ForegroundColor Yellow }
 function Write-Err  { param([string]$m) Write-Host "[unblock-install] $m" -ForegroundColor Red }
 
-function Cleanup { if (Test-Path $TmpDir) { Remove-Item -Recurse -Force -Path $TmpDir -ErrorAction SilentlyContinue } }
+function Cleanup {
+  if (Test-Path $TmpDir) { Remove-Item -Recurse -Force -Path $TmpDir -ErrorAction SilentlyContinue }
+  if ($script:LockHeld) {
+    try { $script:LockStream.Close() } catch {}
+    Remove-Item -Force -Path $LockFile -ErrorAction SilentlyContinue
+    $script:LockHeld = $false
+  }
+}
 
 function Test-Command { param([string]$Name) [bool](Get-Command $Name -ErrorAction SilentlyContinue) }
 
@@ -49,7 +69,7 @@ function Get-Arch {
     'AMD64' { return 'x64' }
     'ARM64' { return 'arm64' }
     'x86'   { return 'x64' }   # 32-bit shell on 64-bit OS -- best-effort
-    default { Write-Err "unsupported arch: $a"; exit 1 }
+    default { Write-Err "unsupported arch: $a"; Cleanup; exit 1 }
   }
 }
 
@@ -69,19 +89,54 @@ function Compare-Versions {
 }
 
 function Get-LatestTag {
-  $url = "https://api.github.com/repos/$Repo/releases/latest"
-  Write-Log "fetching $url"
-  try {
-    $json = Invoke-RestMethod -Uri $url -UseBasicParsing -Headers @{ 'User-Agent' = 'unblock-install' }
-  } catch {
-    Write-Err "failed to fetch latest release metadata: $_"
-    Cleanup; exit 1
+  # Version pin: skips ALL metadata resolution, so the install works even
+  # when every metadata source is down (asset downloads use the release
+  # CDN, not the API). This is the stage/demo escape hatch.
+  if ($env:UNBLOCK_VERSION) {
+    # Normalize: accept 0.1.7 / v0.1.7 / V0.1.7, emit v0.1.7 (tags are vX.Y.Z).
+    $v = 'v' + ($env:UNBLOCK_VERSION -replace '^[vV]', '')
+    Write-Log "using pinned version $v (UNBLOCK_VERSION) -- skipping release metadata"
+    return $v
   }
-  if (-not $json.tag_name) {
-    Write-Err 'no tag_name in release metadata'
-    Cleanup; exit 1
+
+  # Primary: our own CF-fronted, edge-cached pointer -- not subject to
+  # api.github.com's unauthenticated 60 req/hr/IP limit (shared across a
+  # whole NAT), which 504-killed live installs on 2026-07-28.
+  # Fallback: api.github.com direct -- same JSON shape, one parser, so a
+  # pointer outage can never make an install worse than the old behavior.
+  $pointerUrl = if ($env:UNBLOCK_LATEST_URL) { $env:UNBLOCK_LATEST_URL } else { 'https://install.kaeva.app/api/cli-latest' }
+  $apiUrl     = "https://api.github.com/repos/$Repo/releases/latest"
+  # Per-source budgets: the CF-edge pointer is fast-or-not-at-all (one try,
+  # tight timeout -- a hanging pointer must never stall the install); the
+  # flaky API source gets patience (retries + backoff).
+  $sources = @(
+    @{ Url = $pointerUrl; Attempts = 1; TimeoutSec = 8 },
+    @{ Url = $apiUrl;     Attempts = 3; TimeoutSec = 30 }
+  )
+  foreach ($s in $sources) {
+    for ($i = 1; $i -le $s.Attempts; $i++) {
+      try {
+        $json = Invoke-RestMethod -Uri $s.Url -UseBasicParsing -TimeoutSec $s.TimeoutSec -Headers @{ 'User-Agent' = 'unblock-install' }
+        if ($json.tag_name) { return $json.tag_name }
+        Write-Warn "no tag_name in metadata from $($s.Url) -- trying next source"
+        break
+      } catch {
+        if ($i -lt $s.Attempts) {
+          Write-Warn "metadata fetch failed ($($s.Url)) attempt $i/$($s.Attempts) -- retrying in $(2 * $i)s"
+          Start-Sleep -Seconds (2 * $i)
+        } else {
+          Write-Warn "failed to fetch release metadata from $($s.Url): $($_.Exception.Message) -- trying next source"
+        }
+      }
+    }
   }
-  return $json.tag_name
+  Write-Err 'could not resolve the latest release from any source:'
+  Write-Err "  $pointerUrl"
+  Write-Err "  $apiUrl"
+  Write-Err 'if this is a network blip, re-run in a minute -- or pin a version and skip'
+  Write-Err "resolution entirely (releases: github.com/$Repo/releases):"
+  Write-Err '  $env:UNBLOCK_VERSION = "vX.Y.Z"; iwr -useb install.kaeva.app/install.ps1 | iex'
+  Cleanup; exit 1
 }
 
 function Test-AlreadyInstalled {
@@ -101,6 +156,12 @@ function Test-AlreadyInstalled {
 
 function Add-ToUserPath {
   param([string]$Dir)
+  if ($env:UNBLOCK_NO_MODIFY_PATH) {
+    # Patch this session only; the persistent USER PATH stays untouched.
+    if (-not (($env:Path -split ';') -contains $Dir)) { $env:Path = "$Dir;$env:Path" }
+    Write-Log "UNBLOCK_NO_MODIFY_PATH set -- USER PATH left untouched (this session only: $Dir)"
+    return
+  }
   $cur = [Environment]::GetEnvironmentVariable('Path','User')
   if ([string]::IsNullOrEmpty($cur)) { $cur = '' }
   $parts = $cur.Split(';') | Where-Object { $_ -ne '' }
@@ -120,6 +181,57 @@ function Get-Sha256 {
   return (Get-FileHash -Algorithm SHA256 -Path $Path).Hash.ToLower()
 }
 
+function Test-InstalledAtPath {
+  # Checks the binary AT the install path (not whatever PATH resolves — a race
+  # loser's session PATH may not see the winner's fresh install).
+  param([string]$Path, [string]$RemoteTag)
+  if (-not (Test-Path $Path)) { return $false }
+  $cur = $null
+  try { $cur = (& $Path --version 2>$null | Select-Object -First 1).Split(' ')[-1] } catch {}
+  if ([string]::IsNullOrWhiteSpace($cur)) { return $false }
+  return ((Compare-Versions -a $cur -b $RemoteTag) -ge 0)
+}
+
+function Get-InstallLock {
+  # A fleet-wide "upgrade now" can land N concurrent installer runs on one box
+  # (seen live 2026-07-25: two runs raced one install dir; the loser failed
+  # AFTER the winner had already placed the right binary, misreporting a
+  # healthy box as a failed install). NOTE: New-Item -ItemType Directory is
+  # NOT atomic (the cmdlet exists-checks, then calls the idempotent
+  # Directory.CreateDirectory -- two processes can both "create" it; proven
+  # by a live 7ms race). FileMode::CreateNew IS atomic at the OS level, and
+  # holding the handle (FileShare::None) means a LIVE holder also defeats
+  # stale-reclaim deletion; only a dead holder's lock can be removed.
+  for ($try = 1; $try -le 60; $try++) {
+    try {
+      $script:LockStream = [System.IO.File]::Open($LockFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+      $script:LockHeld = $true
+      return $true
+    } catch [System.IO.IOException] {
+      # Distinguish a LIVE holder (its open FileShare::None handle makes our
+      # probe fail with a sharing violation -> keep waiting) from a DEAD one
+      # (handle gone -> probe opens -> the lock is stale NOW, no age wait).
+      $holderAlive = $false
+      try {
+        $probe = [System.IO.File]::Open($LockFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $probe.Close()
+      } catch [System.IO.FileNotFoundException] {
+        continue
+      } catch [System.IO.IOException] {
+        $holderAlive = $true
+      }
+      if (-not $holderAlive) {
+        Write-Warn "removing stale install lock (holder no longer running): $LockFile"
+        Remove-Item -Force -Path $LockFile -ErrorAction SilentlyContinue
+        continue
+      }
+      Write-Log "another install is running (lock $LockFile) -- waiting 5s ($try/60)"
+      Start-Sleep -Seconds 5
+    }
+  }
+  return $false
+}
+
 # ---------- main ----------
 function Invoke-Install {
   $arch = Get-Arch
@@ -130,6 +242,23 @@ function Invoke-Install {
 
   if (Test-AlreadyInstalled -RemoteTag $remoteTag) {
     Write-Log "nothing to do -- exit 2 (already installed, skipped)"
+    Cleanup; exit 2
+  }
+
+  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+  $installPath = Join-Path $InstallDir $BinName
+  if (-not (Get-InstallLock)) {
+    if (Test-InstalledAtPath -Path $installPath -RemoteTag $remoteTag) {
+      Write-Log "install lock never freed, but $installPath already satisfies $remoteTag -- already installed (exit 2)"
+      Cleanup; exit 2
+    }
+    Write-Err "another install has held the lock for 5+ minutes and no satisfying binary appeared ($LockFile)."
+    Write-Err "it may be on a very slow download -- rerun once it completes, or remove the lock file if nothing is running."
+    Cleanup; exit 1
+  }
+  # Another run may have finished while we waited on the lock.
+  if (Test-InstalledAtPath -Path $installPath -RemoteTag $remoteTag) {
+    Write-Log "a concurrent install already placed $BinName >= $remoteTag -- nothing to do (exit 2)"
     Cleanup; exit 2
   }
 
@@ -183,16 +312,44 @@ function Invoke-Install {
     }
   }
 
-  New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  $installPath = Join-Path $InstallDir $BinName
-  Move-Item -Force -Path $assetPath -Destination $installPath
+  # The target can be mid-execution or transiently locked -- retry briefly,
+  # then tell the truth: a failed swap over an already-satisfying binary is
+  # the exit-2 case, never a false red on a healthy box.
+  $swapped = $false
+  foreach ($attempt in 1..3) {
+    try {
+      Move-Item -Force -Path $assetPath -Destination $installPath -ErrorAction Stop
+      $swapped = $true
+      break
+    } catch {
+      Write-Warn "binary swap failed (attempt $attempt/3): $($_.Exception.Message) -- retrying in 2s"
+      Start-Sleep -Seconds 2
+    }
+  }
+  if (-not $swapped) {
+    if (Test-InstalledAtPath -Path $installPath -RemoteTag $remoteTag) {
+      Write-Log "swap failed but $installPath already satisfies $remoteTag (a concurrent install won) -- exit 2"
+      Cleanup; exit 2
+    }
+    Write-Err "failed to install to $installPath after 3 attempts (binary in use?)"
+    Cleanup; exit 1
+  }
   Write-Log "installed to $installPath"
 
   Add-ToUserPath -Dir $InstallDir
 
   Write-Host ''
   Write-Host '------------------------------------------------------------'
-  Write-Host "  unblock $remoteTag installed."
+  Write-Host "  unblock $remoteTag installed to $installPath"
+  Write-Host ''
+  Write-Host '  This PowerShell session can use unblock right now.'
+  if ($env:UNBLOCK_NO_MODIFY_PATH) {
+    Write-Host '  Other and new shells will NOT find it (UNBLOCK_NO_MODIFY_PATH is'
+    Write-Host "  set): add $InstallDir to PATH yourself, or use the full path."
+  } else {
+    Write-Host '  New shells find it via your USER PATH; shells already open'
+    Write-Host '  (including cmd and VS Code terminals) need a restart to see it.'
+  }
   Write-Host ''
   Write-Host '  Now run:'
   Write-Host '    unblock login          # sign in -- or create your account'

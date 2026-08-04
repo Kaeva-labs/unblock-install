@@ -12,3 +12,10 @@ _headers   text eol=lf
 # Binary-safe sentinels
 *.png binary
 *.jpg binary
+
+# The update feed is SIGNED OVER EXACT BYTES (ed25519 detached, see README).
+# Any line-ending conversion between signing and serving silently invalidates
+# the signature — treat feed files as byte-exact, never converted.
+feed/*.json -text
+feed/*.sig  -text
+*.mjs text eol=lf

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="1.5 7.5 65 65" width="64" height="64">
+  <!--
+    UNBLOCK brand mark · v3
+    Laying brick · 35° X-axis tilt · 3 faces exposed
+    Same palette as Kaeva Labs pyramid (logo.svg).
+
+    v3 changes from v1:
+      Depth recession angle bumped from ~30° to 35° about X axis.
+      Effect: brick is tipped slightly more forward — top face more
+      prominent, front face compressed slightly. 1px shift on the
+      back edges (y: 31 → 30, y: 43 → 42).
+
+      No 2D Z-axis rotation (v2's planar tilt was scrapped per
+      your correction).
+
+    Math:
+      depth = 14 (along brick's back axis)
+      dx_recede = 14 · cos(35°) ≈ 11.5  → kept at 12 (visual round)
+      dy_recede = 14 · sin(35°) ≈ 8.0   → 8 (was 7 in v1 ≈ 30°)
+
+    Lighting analog to pyramid:
+      Top face   #7DBAE6 (lightest — catches light from above)
+      Front face #4A8BD4 (mid)
+      Right end  #1E3A5F (darkest)
+  -->
+
+  <!-- Front face (mid blue) -->
+  <polygon points="8,50 48,50 48,38 8,38" fill="#4A8BD4"/>
+
+  <!-- Top face (light blue, parallelogram receding back at 35° X tilt) -->
+  <polygon points="8,38 48,38 60,30 20,30" fill="#7DBAE6"/>
+
+  <!-- Right end face (deep navy, receding back-up) -->
+  <polygon points="48,50 60,42 60,30 48,38" fill="#1E3A5F"/>
+</svg>

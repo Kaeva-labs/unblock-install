@@ -16,6 +16,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 INSTALL_SH="$ROOT/install.sh"
 
+# The public entrypoint is `curl | sh` — run the installer under sh (dash on
+# Debian/Ubuntu), not bash, so bashisms fail here before they fail live.
+INSTALL_SHELL="${INSTALL_TEST_SHELL:-sh}"
+
 PASS=0; FAIL=0
 TESTDIR="$(mktemp -d 2>/dev/null || mktemp -d -t unblock-test)"
 trap 'rm -rf "$TESTDIR"; [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null || true' EXIT
@@ -47,8 +51,11 @@ EOF
 publish_release() {
   tag="$1"; os="$2"; arch="$3"
   asset="unblock-${os}-${arch}"
-  # API metadata
-  printf '{"tag_name":"%s","name":"%s"}\n' "$tag" "$tag" > "$SERVER_ROOT/api/latest.json"
+  # Pointer metadata (the primary source) carries the REAL tag; the API mock
+  # carries a decoy so a precedence bug (API consulted first) shows up in the
+  # log instead of being masked by identical bodies.
+  printf '{"tag_name":"%s","name":"%s"}\n' "$tag" "$tag" > "$SERVER_ROOT/api/pointer.json"
+  printf '{"tag_name":"%s","name":"%s"}\n' "v9.9.9-apionly" "v9.9.9-apionly" > "$SERVER_ROOT/api/latest.json"
   # Asset
   make_fake_bin "$tag" "$SERVER_ROOT/dl/$asset"
   # Checksum
@@ -73,10 +80,36 @@ start_server() {
   echo "mock server failed to start"; exit 1
 }
 
-# Patch install.sh to point at our mock server
+# Patch install.sh to point at our mock server. Both metadata sources (the
+# install.kaeva.app pointer and the api.github.com fallback) serve the same
+# JSON shape, so both map to the same mock endpoint here.
 patched_install() {
   out="$1"
   sed \
+    -e "s|https://install.kaeva.app/api/cli-latest|http://127.0.0.1:${SERVER_PORT}/api/pointer.json|g" \
+    -e "s|https://api.github.com/repos/\${REPO}/releases/latest|http://127.0.0.1:${SERVER_PORT}/api/latest.json|g" \
+    -e "s|https://github.com/\${REPO}/releases/download/\${remote_tag}|http://127.0.0.1:${SERVER_PORT}/dl|g" \
+    "$INSTALL_SH" > "$out"
+  chmod +x "$out"
+}
+
+# Variant: BOTH metadata sources dead (closed port 1 -> instant refusal,
+# curl/wget treat connection-refused as fatal, no retry stall), assets live.
+patched_meta_dead() {
+  out="$1"
+  sed \
+    -e "s|https://install.kaeva.app/api/cli-latest|http://127.0.0.1:1/pointer|g" \
+    -e "s|https://api.github.com/repos/\${REPO}/releases/latest|http://127.0.0.1:1/api|g" \
+    -e "s|https://github.com/\${REPO}/releases/download/\${remote_tag}|http://127.0.0.1:${SERVER_PORT}/dl|g" \
+    "$INSTALL_SH" > "$out"
+  chmod +x "$out"
+}
+
+# Variant: pointer dead, API source live -> exercises the fallback leg.
+patched_pointer_dead() {
+  out="$1"
+  sed \
+    -e "s|https://install.kaeva.app/api/cli-latest|http://127.0.0.1:1/pointer|g" \
     -e "s|https://api.github.com/repos/\${REPO}/releases/latest|http://127.0.0.1:${SERVER_PORT}/api/latest.json|g" \
     -e "s|https://github.com/\${REPO}/releases/download/\${remote_tag}|http://127.0.0.1:${SERVER_PORT}/dl|g" \
     "$INSTALL_SH" > "$out"
@@ -106,11 +139,12 @@ echo "test 1: fresh install"
 FAKE_HOME="$TESTDIR/home1"
 mkdir -p "$FAKE_HOME"
 set +e
-HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:/usr/bin:/bin" bash "$PATCHED" > "$TESTDIR/t1.log" 2>&1
+HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:/usr/bin:/bin" "$INSTALL_SHELL" "$PATCHED" > "$TESTDIR/t1.log" 2>&1
 RC=$?
 set -e
-if [ "$RC" -eq 0 ] && [ -x "$FAKE_HOME/.local/bin/unblock" ]; then
-  ok "installs binary, rc=0"
+if [ "$RC" -eq 0 ] && [ -x "$FAKE_HOME/.local/bin/unblock" ] \
+   && grep -q "latest release: v0.2.0" "$TESTDIR/t1.log"; then
+  ok "installs binary, rc=0, tag came from the POINTER (not the API decoy)"
 else
   fail "rc=$RC, binary exists=$( [ -x "$FAKE_HOME/.local/bin/unblock" ] && echo yes || echo no ) — log:"
   cat "$TESTDIR/t1.log" | sed 's/^/    /'
@@ -119,7 +153,7 @@ fi
 # ---------- test 2: idempotency (same version) ----------
 echo "test 2: idempotency"
 set +e
-HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:/usr/bin:/bin" bash "$PATCHED" > "$TESTDIR/t2.log" 2>&1
+HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:/usr/bin:/bin" "$INSTALL_SHELL" "$PATCHED" > "$TESTDIR/t2.log" 2>&1
 RC=$?
 set -e
 if [ "$RC" -eq 2 ]; then
@@ -136,7 +170,7 @@ echo "deadbeef00000000000000000000000000000000000000000000000000000000  unblock-
 FAKE_HOME3="$TESTDIR/home3"
 mkdir -p "$FAKE_HOME3"
 set +e
-HOME="$FAKE_HOME3" PATH="$FAKE_HOME3/.local/bin:/usr/bin:/bin" bash "$PATCHED" > "$TESTDIR/t3.log" 2>&1
+HOME="$FAKE_HOME3" PATH="$FAKE_HOME3/.local/bin:/usr/bin:/bin" "$INSTALL_SHELL" "$PATCHED" > "$TESTDIR/t3.log" 2>&1
 RC=$?
 set -e
 if [ "$RC" -eq 1 ] && grep -q 'sha256 mismatch' "$TESTDIR/t3.log"; then
@@ -157,6 +191,63 @@ case "$OS" in
     fi
     ;;
 esac
+
+# Restore a clean release: test 3 corrupted the served SHA256SUMS.
+publish_release "v0.2.0" "$OS" "$ARCH"
+
+# ---------- test 5: UNBLOCK_VERSION pin, metadata sources DOWN ----------
+echo "test 5: UNBLOCK_VERSION pin survives dead metadata sources"
+PATCHED_META_DEAD="$TESTDIR/install_meta_dead.sh"
+patched_meta_dead "$PATCHED_META_DEAD"
+FAKE_HOME5="$TESTDIR/home5"
+mkdir -p "$FAKE_HOME5"
+set +e
+HOME="$FAKE_HOME5" PATH="$FAKE_HOME5/.local/bin:/usr/bin:/bin" UNBLOCK_VERSION=v0.2.0 \
+  "$INSTALL_SHELL" "$PATCHED_META_DEAD" > "$TESTDIR/t5.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] && [ -x "$FAKE_HOME5/.local/bin/unblock" ]; then
+  ok "pinned install succeeds with every metadata endpoint dead"
+else
+  fail "expected rc=0 + binary, got rc=$RC — log:"
+  cat "$TESTDIR/t5.log" | sed 's/^/    /'
+fi
+
+# ---------- test 6: pointer down -> API-source fallback ----------
+echo "test 6: pointer outage falls back to the API source"
+PATCHED_PTR_DEAD="$TESTDIR/install_pointer_dead.sh"
+patched_pointer_dead "$PATCHED_PTR_DEAD"
+FAKE_HOME6="$TESTDIR/home6"
+mkdir -p "$FAKE_HOME6"
+set +e
+HOME="$FAKE_HOME6" PATH="$FAKE_HOME6/.local/bin:/usr/bin:/bin" \
+  "$INSTALL_SHELL" "$PATCHED_PTR_DEAD" > "$TESTDIR/t6.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 0 ] && [ -x "$FAKE_HOME6/.local/bin/unblock" ] \
+   && grep -q "trying next source" "$TESTDIR/t6.log" \
+   && grep -q "v9.9.9-apionly" "$TESTDIR/t6.log"; then
+  ok "fallback source installs (decoy tag proves the API leg ran); failover stated"
+else
+  fail "expected rc=0 + binary + 'trying next source', got rc=$RC — log:"
+  cat "$TESTDIR/t6.log" | sed 's/^/    /'
+fi
+
+# ---------- test 7: every metadata source down, no pin ----------
+echo "test 7: all metadata sources down -> honest error + pin hint"
+FAKE_HOME7="$TESTDIR/home7"
+mkdir -p "$FAKE_HOME7"
+set +e
+HOME="$FAKE_HOME7" PATH="$FAKE_HOME7/.local/bin:/usr/bin:/bin" \
+  "$INSTALL_SHELL" "$PATCHED_META_DEAD" > "$TESTDIR/t7.log" 2>&1
+RC=$?
+set -e
+if [ "$RC" -eq 1 ] && grep -q "UNBLOCK_VERSION" "$TESTDIR/t7.log"; then
+  ok "exit 1 and the error teaches the UNBLOCK_VERSION escape hatch"
+else
+  fail "expected rc=1 + UNBLOCK_VERSION hint, got rc=$RC — log:"
+  cat "$TESTDIR/t7.log" | sed 's/^/    /'
+fi
 
 # ---------- summary ----------
 echo

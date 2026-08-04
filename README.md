@@ -1,6 +1,10 @@
 # unblock-install
 
-Hosting source for **install.kaeva.app** — the one-liner installer for the [UNBLOCK CLI](https://github.com/Viraj0518/unblock-install/releases/latest).
+Hosting source for **install.kaeva.app** — the UNBLOCK download surface, one page serving three acquisition paths:
+
+1. **Desktop app** (Tauri) — per-OS download buttons resolved live from the desktop release repo via `/api/desktop`.
+2. **Web app / PWA** — link to [app.kaeva.app](https://app.kaeva.app) with browser-install guidance.
+3. **CLI** — the original one-liner installer for the [UNBLOCK CLI](https://github.com/Kaeva-labs/unblock-install/releases/latest).
 
 ## Usage
 
@@ -24,7 +28,7 @@ Hosting source for **install.kaeva.app** — the one-liner installer for the [UN
 |------|----------|
 | 1 | Detect OS (`linux` / `darwin` / `windows`) and arch (`x64` / `arm64`). |
 | 2 | If `unblock` is already on PATH and its `--version` is ≥ the latest GitHub release, exit `2`. |
-| 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Viraj0518/unblock-install`. |
+| 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Kaeva-labs/unblock-install`. |
 | 4 | SHA256-verify against `SHA256SUMS` published alongside the release. |
 | 5 | Install:<br>• Linux/macOS → `$HOME/.local/bin/unblock` (chmod +x; prepended to PATH via shell rc).<br>• Windows → `$env:LOCALAPPDATA\unblock\unblock.exe` (added to USER PATH via `[Environment]::SetEnvironmentVariable`). |
 | 6 | Print onboarding hint pointing the user at `unblock login` / `unblock initialize`. |
@@ -37,22 +41,107 @@ Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
 .
 ├── install.sh                 POSIX bash installer (Linux + macOS)
 ├── install.ps1                PowerShell 5.1+ installer (Windows)
-├── landing.html               Human-facing landing page (served to browsers)
+├── landing.html               Human-facing download page (served to browsers)
 ├── _redirects                 CF Pages explicit-path routing
 ├── functions/index.js         CF Pages Function — UA / Accept negotiation for `/`
+├── functions/api/desktop.js   CF Pages Function — resolves latest desktop (Tauri) release per-platform
 ├── tests/
 │   ├── test_install_sh.sh     bash integration tests (mock GH release)
-│   └── Test-InstallPs1.ps1    PowerShell integration tests (mock GH release)
-├── .github/workflows/test.yml shellcheck + PSScriptAnalyzer + integration tests
+│   ├── Test-InstallPs1.ps1    PowerShell integration tests (mock GH release)
+│   └── test_desktop_api.mjs   node unit tests for the /api/desktop asset matcher
 └── README.md
 ```
+
+(CI note: this repo's GitHub Actions workflows were removed — CI runs on Fly via `unblock_ci`.)
+
+## Desktop app downloads (`/api/desktop`)
+
+`functions/api/desktop.js` resolves the newest release of the **desktop release repo**
+(env var `DESKTOP_REPO` in the Pages project settings; default `Kaeva-labs/unblock`)
+and maps Tauri v2 bundle assets to platforms (`windows-x64`, `macos-arm64`, `linux-x64`, …):
+NSIS `-setup.exe` > `.msi`; arch `.dmg` > `universal.dmg`; `.AppImage` > `.deb` > `.rpm`.
+It tries `releases/latest` first, then falls back to the releases list because
+`releases/latest` excludes prereleases — and the beta ships as `prerelease: true`
+(`v0.1.0-beta`). Responses are edge-cached 5 minutes. If no usable release exists it
+returns `{ "available": false }` and the landing page shows an honest degraded state.
+
+> ⚠️ **Do NOT publish desktop artifacts to this repo's releases.** `install.sh` /
+> `install.ps1` resolve `releases/latest` of `Kaeva-labs/unblock-install` for the **CLI**;
+> a desktop release becoming "latest" here would break the CLI installer. Desktop
+> artifacts belong in the repo `DESKTOP_REPO` points at (public, with Tauri bundle
+> assets + `SHA256SUMS`).
+
+## Beta waitlist (`/api/waitlist`)
+
+`functions/api/waitlist.js` accepts `POST {email}` (JSON or form-encoded), drops
+honeypot hits quietly, and proxies valid signups to the `WAITLIST_ENDPOINT` env var
+(owned by unblock_substrate; proposed contract `POST {email, source, ts}` → 2xx).
+Unconfigured → honest `503`; upstream failure → honest `502`; never a fake success.
+
+Deploy checklist for the waitlist path:
+1. Set `WAITLIST_ENDPOINT` in the Pages project settings.
+2. Add a Cloudflare WAF rate-limit rule on `POST /api/waitlist` (the function itself
+   has no per-IP limit — by design, edge rules are the right layer).
+3. Upstream store must upsert by email (idempotent) so repeat submissions dedupe.
+
+## Update feed (`/feed/updates.json`) — M2 update channel
+
+Static signed JSON feed (Viraj ruling, PRD-VOICE-PROACTIVE-DESKTOP §4-M2) announcing
+shipped features + SOP updates. Consumers: the desktop **What's New** pane (humans),
+the substrate SOP-ingest path (org-brain), and the M1 capability provisioner.
+
+- **Schema `unblock-update-feed/v1`**: `{schema, generated_at, items[]}`; each item
+  `{id, date, kind: feature|sop|release, title, body, action?{label, target},
+  sop?{content, sop_version, tags?}, provision?{manifest_url, min_manifest_version}}`.
+  `action.target` is an https URL or a local `app:` route (desktop pane opens https via
+  its system-browser opener). `provision` carries ONLY the manifest pointer — the feed is
+  the notification, the signed manifest is the authority (unblock_cli M1 interim
+  contract). Title = one plain-language sentence, one button (Frank-mode default; maya
+  owns copy — every item is a public claim).
+- **Transport note for verifiers**: sign/verify is over the origin file's exact bytes;
+  HTTP content-encoding (gzip/br) is transparent — verify the DECODED response body,
+  which equals the origin bytes. Never re-serialize the JSON before verifying.
+- **SOP items** (per SOP-WRITE-CONTRACT **v1.1**, blk_7bc37a74, supersedes blk_69cdf67d):
+  the item `id` is the **supersede join key and MUST stay stable across versions** of the
+  same SOP — bump `sop.sop_version` (monotonic int) and `date`, never the id. Per-install
+  clients (no org-side ingester) write versions append-only via `/v1/remember` with
+  `parent_block_id` lineage; newest-per-id wins on read. No `supersedes` field exists —
+  the feed cannot reference per-org block ids. Substrate dedup is (author_did,
+  content_hash) = AUTHOR-scoped, so clients MUST pre-check by id tag + sop_version
+  before writing (contract §v1.1).
+- **Hard gate**: `kind=sop` items and `provision` fields MUST NOT ship while the feed is
+  unsigned — signature verification is a hard precondition for brain writes and
+  provisioning (substrate contract). The unsigned-dev feed may carry only informational
+  `feature`/`release` items. Enforced by `tests/test_feed.mjs` (fails if a sop/provision
+  item exists without `updates.json.sig` alongside).
+- **Signature**: ed25519 detached over the EXACT BYTES of `updates.json`, base64 in
+  `updates.json.sig`. Never reformat the file after signing. **The public key is NOT
+  served from this origin** — it is pinned in the desktop binary; a same-origin key
+  would make the signature theater. Tooling: `node scripts/feed-sign.mjs
+  keygen|sign|verify` (keygen output `*.key` is private — never commit).
+- **Key custody (RULED 2026-07-21)**: the private key lives in the Supabase **Vault**
+  (row `update_feed_signing_key`, same custody class as the other app secrets — never a
+  key file in a repo). One-time mint: `scripts/mint_feed_signing_key.mjs` — **Viraj-run,
+  human-gated** (`--arm-viraj-run`; dry-runs otherwise; refuses if the row exists;
+  read-back sign/verify proves the stored key; prints ONLY the public key, which gets
+  pinned in the desktop binary). Publish flow: `scripts/feed-publish-sign.mjs` reads the
+  key from the Vault at publish time, signs the exact bytes, self-verifies, writes
+  `updates.json.sig`, and prints the corresponding public key for an eyeball match
+  against the pinned one. Until the mint runs, `updates.json.sig` is absent and the
+  feed is unsigned-dev (informational items only, test-enforced).
+- Sanity: `node tests/test_feed.mjs` (schema + sign/verify roundtrip + tamper detection).
 
 ## Releasing the CLI binary
 
 The installer expects assets named **`unblock-<os>-<arch>[.exe]`** plus a
 **`SHA256SUMS`** file in the same release.
 
-Recommended `gh` flow (releases are published to **this** repo, `Viraj0518/unblock-install`):
+Canonical build+publish machinery lives in `unblock_ci/release-runner/scripts/build-and-release.sh`
+(clones the polyrepo siblings, builds the pkg target matrix, generates `SHA256SUMS`, publishes
+via `gh`). Releases are cut on an off-Actions runner. They land on **this**
+repo (`Kaeva-labs/unblock-install`) — that is what the installer scripts resolve at runtime.
+
+Equivalent manual `gh` flow:
 
 ```sh
 # 1. Build native binaries (pkg, nexe, deno compile, etc.)
@@ -98,7 +187,7 @@ cosign sign-blob \
 # Client side (added to install.sh + install.ps1):
 cosign verify-blob \
   --bundle SHA256SUMS.cosign.bundle \
-  --certificate-identity "https://github.com/Viraj0518/unblock-install/.github/workflows/release.yml@refs/tags/${TAG}" \
+  --certificate-identity "https://github.com/Kaeva-labs/unblock-install/.github/workflows/release.yml@refs/tags/${TAG}" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   SHA256SUMS
 ```
@@ -110,7 +199,7 @@ is not yet performed.
 
 This repo is wired to **`install.kaeva.app`** via Cloudflare Pages:
 
-1. Pages → **Create project** → **Connect to Git** → `Viraj0518/unblock-install` → `main` branch.
+1. Pages → **Create project** → **Connect to Git** → `Kaeva-labs/unblock-install` → `main` branch.
 2. Build command: *(none — static)*. Output directory: `/`.
 3. **Custom domains** → add `install.kaeva.app` (CNAME to `<project>.pages.dev`, orange-cloud proxied for auto-cert).
 4. The Pages Function at `functions/index.js` handles UA-based content negotiation for `/`.
@@ -123,6 +212,9 @@ bash tests/test_install_sh.sh
 
 # PowerShell installer
 pwsh -File tests/Test-InstallPs1.ps1
+
+# /api/desktop asset matcher
+node tests/test_desktop_api.mjs
 ```
 
 ## License

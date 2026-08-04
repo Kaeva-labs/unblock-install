@@ -10,3 +10,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# local dev runtimes (never commit — this repo is PUBLIC)
+.wrangler/
+node_modules/
