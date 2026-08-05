@@ -8,6 +8,30 @@
 #   - second run with same version exits 2 (idempotency)
 #   - bad SHA256 in SHA256SUMS causes exit 1
 
+# ── WINDOWS-ONLY BY CONSTRUCTION. Loud-skip anywhere else. ──────────────────
+#
+# install.ps1 is the WINDOWS installer: it writes to $env:LOCALAPPDATA and
+# installs unblock.exe. PowerShell 7 (pwsh) is cross-platform, so "a PowerShell
+# host exists" is NOT the same question as "this installer can run here" — and
+# conflating the two is what made gate.sh run this suite on a Linux runner,
+# where all five tests failed for the entirely uninteresting reason that
+# LOCALAPPDATA does not exist.
+#
+# Skipping LOUDLY rather than passing silently: a green tick that means "we
+# never tested Windows" is worse than a visible gap, and this repo has been
+# bitten once already by a manual step nobody executed (see #20).
+#
+# The PARSE check in gate.sh runs everywhere and is unaffected — syntax errors
+# in install.ps1 are still caught on every runner. Only the behavioural suite
+# is gated here.
+if ($null -ne $IsWindows -and -not $IsWindows) {
+  Write-Host "SKIPPED (LOUD): Test-InstallPs1.ps1 is Windows-only — install.ps1 targets"
+  Write-Host "                `$env:LOCALAPPDATA and unblock.exe, neither of which exists on"
+  Write-Host "                $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription.Trim())."
+  Write-Host "                Windows-side behavioural coverage is NOT running here."
+  exit 0
+}
+
 $ErrorActionPreference = 'Stop'
 
 $Here       = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -157,6 +181,21 @@ try {
   $src3 = $src3 -replace 'https://github\.com/\$Repo/releases/download/\$remoteTag', "http://127.0.0.1:$Port/dl"
   Set-Content -Path $patchedPtrDead -Value $src3 -Encoding UTF8
 
+  # Re-invoke the SAME PowerShell host that is running this harness, not a
+  # hardcoded 'powershell'. Windows PowerShell 5.1 ships as 'powershell' and
+  # exists only on Windows; PowerShell 7+ is 'pwsh' everywhere. Hardcoding the
+  # former made every child invocation throw on Linux/macOS, which set $rc=99
+  # and — because the redirection never created the log — made the NEXT line
+  # (Get-Content t1.log) die with 'Cannot find path'. The harness could
+  # therefore only ever run on Windows, and locally it was invisible because
+  # gate.sh loud-skips this leg when no PowerShell host is installed at all.
+  # Using the current host is also what gate.sh intends: it runs this suite
+  # once per available host (pwsh, then powershell 5.1), so each leg should
+  # exercise its own host.
+  $PsHost = (Get-Process -Id $PID).Path
+  if (-not $PsHost) { $PsHost = 'pwsh' }
+  Write-Host "harness host: $PsHost"
+
   # ---------- test 1: fresh install ----------
   Write-Host 'test 1: fresh install'
   $home1 = Join-Path $TestDir 'home1'
@@ -164,11 +203,11 @@ try {
   $env:LOCALAPPDATA = Join-Path $home1 'AppData\Local'
   $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
   try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $patched *> (Join-Path $TestDir 't1.log')
+    & $PsHost -NoProfile -ExecutionPolicy Bypass -File $patched *> (Join-Path $TestDir 't1.log')
     $rc = $LASTEXITCODE
   } catch { $rc = 99 }
   $installed = Join-Path $env:UNBLOCK_INSTALL_DIR 'unblock.exe'
-  $log1 = Get-Content (Join-Path $TestDir 't1.log') -Raw
+  $log1 = if (Test-Path (Join-Path $TestDir 't1.log')) { Get-Content (Join-Path $TestDir 't1.log') -Raw } else { "<no log: the child host never ran or produced no output>" }
   if ($rc -eq 0 -and (Test-Path $installed) -and $log1 -match 'latest release: v0\.2\.0') {
     Ok 'installs binary, rc=0, tag came from the POINTER (not the API decoy)'
   } else {
@@ -184,10 +223,10 @@ try {
   $env:LOCALAPPDATA = Join-Path $home2 'AppData\Local'
   $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
   try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $patched *> (Join-Path $TestDir 't2.log')
+    & $PsHost -NoProfile -ExecutionPolicy Bypass -File $patched *> (Join-Path $TestDir 't2.log')
     $rc = $LASTEXITCODE
   } catch { $rc = 99 }
-  $log = Get-Content (Join-Path $TestDir 't2.log') -Raw
+  $log = if (Test-Path (Join-Path $TestDir 't2.log')) { Get-Content (Join-Path $TestDir 't2.log') -Raw } else { "<no log: the child host never ran or produced no output>" }
   if ($rc -eq 1 -and $log -match 'sha256 mismatch') {
     Ok 'bad checksum exits 1 with mismatch message'
   } else {
@@ -206,7 +245,7 @@ try {
   $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
   $env:UNBLOCK_VERSION = 'v0.2.0'
   try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $patchedMetaDead *> (Join-Path $TestDir 't3.log')
+    & $PsHost -NoProfile -ExecutionPolicy Bypass -File $patchedMetaDead *> (Join-Path $TestDir 't3.log')
     $rc = $LASTEXITCODE
   } catch { $rc = 99 }
   Remove-Item Env:UNBLOCK_VERSION -ErrorAction SilentlyContinue
@@ -215,7 +254,7 @@ try {
     Ok 'pinned install succeeds with every metadata endpoint dead'
   } else {
     Bad "expected rc=0 + binary, got rc=$rc, exists=$(Test-Path $installed)"
-    Get-Content (Join-Path $TestDir 't3.log') | ForEach-Object { Write-Host "    $_" }
+    if (Test-Path (Join-Path $TestDir 't3.log')) { Get-Content (Join-Path $TestDir 't3.log') | ForEach-Object { Write-Host "    $_" } } else { Write-Host '    <no log: the child host never ran>' }
   }
 
   # ---------- test 4: pointer down -> API-source fallback ----------
@@ -225,11 +264,11 @@ try {
   $env:LOCALAPPDATA = Join-Path $home4 'AppData\Local'
   $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
   try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $patchedPtrDead *> (Join-Path $TestDir 't4.log')
+    & $PsHost -NoProfile -ExecutionPolicy Bypass -File $patchedPtrDead *> (Join-Path $TestDir 't4.log')
     $rc = $LASTEXITCODE
   } catch { $rc = 99 }
   $installed = Join-Path $env:UNBLOCK_INSTALL_DIR 'unblock.exe'
-  $log = Get-Content (Join-Path $TestDir 't4.log') -Raw
+  $log = if (Test-Path (Join-Path $TestDir 't4.log')) { Get-Content (Join-Path $TestDir 't4.log') -Raw } else { "<no log: the child host never ran or produced no output>" }
   if ($rc -eq 0 -and (Test-Path $installed) -and $log -match 'trying next source' -and $log -match 'v9.9.9-apionly') {
     Ok 'fallback source installs (decoy tag proves the API leg ran); failover stated'
   } else {
@@ -244,10 +283,10 @@ try {
   $env:LOCALAPPDATA = Join-Path $home5 'AppData\Local'
   $env:UNBLOCK_INSTALL_DIR = Join-Path $env:LOCALAPPDATA 'unblock'
   try {
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $patchedMetaDead *> (Join-Path $TestDir 't5.log')
+    & $PsHost -NoProfile -ExecutionPolicy Bypass -File $patchedMetaDead *> (Join-Path $TestDir 't5.log')
     $rc = $LASTEXITCODE
   } catch { $rc = 99 }
-  $log = Get-Content (Join-Path $TestDir 't5.log') -Raw
+  $log = if (Test-Path (Join-Path $TestDir 't5.log')) { Get-Content (Join-Path $TestDir 't5.log') -Raw } else { "<no log: the child host never ran or produced no output>" }
   if ($rc -eq 1 -and $log -match 'UNBLOCK_VERSION') {
     Ok 'exit 1 and the error teaches the UNBLOCK_VERSION escape hatch'
   } else {
