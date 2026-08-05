@@ -112,7 +112,12 @@ start_server() {
   if command -v python3 >/dev/null 2>&1; then PY=python3
   elif command -v python  >/dev/null 2>&1; then PY=python
   else echo "skipping: no python for mock server"; exit 0; fi
-  (cd "$SERVER_ROOT" && "$PY" -m http.server "$SERVER_PORT" >/dev/null 2>&1) &
+  # `exec` matters: without it $! is the SUBSHELL's pid, so the EXIT trap kills
+  # the subshell and leaves python holding the port. Every run then leaked a
+  # server, and the next run on the same box died at "mock server failed to
+  # start" — a false RED with nothing to do with the code under test. Observed
+  # live 2026-08-05 (three stale servers from earlier sessions were still up).
+  (cd "$SERVER_ROOT" && exec "$PY" -m http.server "$SERVER_PORT" >/dev/null 2>&1) &
   SERVER_PID=$!
   # Wait for boot
   for _ in 1 2 3 4 5 6 7 8 9 10; do
