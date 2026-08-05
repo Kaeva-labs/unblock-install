@@ -319,12 +319,18 @@ run_capped() {
 
   "$@" >"$cap_out" 2>&1 </dev/null &
   cap_pid=$!
+  # STDOUT MUST BE REDIRECTED HERE. run_capped is called inside $(...), so this
+  # backgrounded block inherits the write end of that command-substitution pipe.
+  # `kill "$cap_watch"` reaps the subshell but NOT the `sleep` it is blocked in;
+  # the orphaned sleep keeps the pipe open, so $(...) cannot return until the
+  # full budget elapses. Without `>/dev/null` the cap becomes a FLOOR and every
+  # install stalls for VERIFY_TIMEOUT on success as well as failure.
   { sleep "$VERIFY_TIMEOUT"
     if kill -0 "$cap_pid" 2>/dev/null; then
       : > "$cap_flag"
       kill -9 "$cap_pid" 2>/dev/null || true
     fi
-  } </dev/null 2>/dev/null &
+  } </dev/null >/dev/null 2>/dev/null &
   cap_watch=$!
 
   cap_status=0
@@ -458,8 +464,16 @@ verify_install() {
   err "  output:    ${shown}"
   explain_verify_failure "$bin" "$vrc" "$vos" "$varch"
   err "Tracking issue: https://github.com/${REPO}/issues/20"
-  err "(Your shell rc files were left untouched — a broken install does not get"
-  err "  wired into your PATH. Nothing under ~/.unblock was modified.)"
+  if [ "${REPLACED_PRIOR:-0}" = "1" ]; then
+    err "(THIS WAS AN UPGRADE: a binary already existed at ${bin} and has been"
+    err "  OVERWRITTEN by this broken one, so ${BIN_NAME} on your PATH is now"
+    err "  non-functional. To get back to a working state immediately, reinstall a"
+    err "  known-good version:  UNBLOCK_VERSION=v0.1.5 curl -fsSL https://install.kaeva.app | sh"
+    err "  Nothing under ~/.unblock was modified.)"
+  else
+    err "(Your shell rc files were left untouched — a broken install does not get"
+    err "  wired into your PATH. Nothing under ~/.unblock was modified.)"
+  fi
   return 1
 }
 
@@ -534,6 +548,14 @@ main() {
   # The target can be mid-execution elsewhere or transiently locked — retry
   # briefly, then tell the truth: a failed swap over an already-satisfying
   # binary is the exit-2 case, never a false red on a healthy box.
+  # Did a binary already live here? Decides whether a failed verification means
+  # "nothing was wired up" (fresh install) or "we just replaced something that
+  # worked" (upgrade) — the two need opposite advice, and telling an upgrader
+  # their PATH is untouched is false: mv -f below overwrites in place.
+  REPLACED_PRIOR=0
+  [ -e "$install_path" ] && REPLACED_PRIOR=1
+  export REPLACED_PRIOR
+
   swapped=0
   for attempt in 1 2 3; do
     if mv -f "$asset_path" "$install_path" 2>/dev/null; then swapped=1; break; fi

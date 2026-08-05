@@ -424,6 +424,33 @@ else
   cat "$DEAD_LOG" | sed 's/^/    /'
 fi
 
+# ---------- test 14: the cap is a CEILING, not a FLOOR ----------
+# Regression guard. run_capped's watchdog is backgrounded inside a $(...)
+# command substitution, so if its stdout is not redirected it inherits the
+# pipe's write end; killing the subshell does not kill the `sleep` it is
+# blocked in, and the orphaned sleep holds the pipe open for the FULL budget.
+# Symptom: every install stalls VERIFY_TIMEOUT seconds on SUCCESS as well as
+# failure. All other tests pass with the stall present, which is exactly why
+# this one asserts on WALL TIME rather than on output.
+echo "test 14: a healthy binary verifies immediately (the cap is not a floor)"
+publish_release "v0.2.0" "$OS" "$ARCH"
+T14_HOME="$TESTDIR/home_t14"
+mkdir -p "$T14_HOME"
+T14_START=$(date +%s)
+set +e
+env HOME="$T14_HOME" PATH="$T14_HOME/.local/bin:/usr/bin:/bin" UNBLOCK_VERIFY_TIMEOUT=20 \
+  "$INSTALL_SHELL" "$PATCHED" > "$TESTDIR/t14.log" 2>&1
+T14_RC=$?
+set -e
+T14_ELAPSED=$(( $(date +%s) - T14_START ))
+DEAD_LOG="$TESTDIR/t14.log"
+if [ "$T14_RC" -eq 0 ] && [ "$T14_ELAPSED" -lt 10 ]; then
+  ok "healthy install verified in ${T14_ELAPSED}s (< 10s, budget was 20s)"
+else
+  fail "expected rc=0 in well under the 20s budget, got rc=$T14_RC in ${T14_ELAPSED}s — log:"
+  cat "$DEAD_LOG" | sed 's/^/    /'
+fi
+
 # ---------- summary ----------
 echo
 printf 'PASS=%s FAIL=%s\n' "$PASS" "$FAIL"
