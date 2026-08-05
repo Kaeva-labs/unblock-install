@@ -10,6 +10,10 @@
 #   UNBLOCK_INSTALL_DIR=DIR   install target (default ~/.local/bin)
 #   UNBLOCK_NO_MODIFY_PATH=1  never touch shell rc files; print advice instead
 #   UNBLOCK_LATEST_URL=URL    override the release-pointer endpoint
+#   UNBLOCK_NO_VERIFY=1       skip the post-install execution check (loud warn).
+#                             Only for hosts that cannot exec the artifact at
+#                             all (cross-arch staging, no-exec sandboxes).
+#   UNBLOCK_VERIFY_TIMEOUT=N  seconds the verification run may take (default 20)
 #
 # What it does (idempotent):
 #   1. Detect OS (linux/darwin) + arch (x64/arm64)
@@ -19,12 +23,15 @@
 #      otherwise download the release artifact from
 #      github.com/Kaeva-labs/unblock-install/releases/latest
 #   4. Verify sha256 against SHA256SUMS published alongside the release
-#   5. Install to $HOME/.local/bin/unblock (chmod +x, prepend to PATH in rc)
-#   6. Print onboarding hint
+#   5. Install to $HOME/.local/bin/unblock (chmod +x)
+#   6. RUN the installed binary and require rc=0 AND non-empty output — a
+#      downloaded-and-chmodded file is not a working CLI (see below)
+#   7. Prepend to PATH in rc, print onboarding hint
 #
 # Exit codes:
 #   0 success
-#   1 failure
+#   1 failure — including "installed, but the binary does not execute here",
+#     which used to be reported as success
 #   2 already installed (skipped — including a concurrent-install race loser
 #     whose box already ended up with a satisfying binary)
 #
@@ -260,11 +267,214 @@ release_lock() {
 
 # True if the binary AT $1 (not whatever PATH resolves — a race loser's PATH
 # may not see the winner's fresh install) already satisfies version $2.
+# Note this (and check_already_installed) EXECUTE the binary and require a
+# version string back, so a binary that dies silently can never satisfy the
+# skip check — the exit-2 path cannot be reached by a dead install.
 installed_at_path_satisfies() {
   bin="$1"; want="$2"
   [ -x "$bin" ] || return 1
   cur="$("$bin" --version 2>/dev/null | head -n1 | awk '{print $NF}' || echo "")"
   [ -n "$cur" ] && ver_ge "$cur" "$want"
+}
+
+# ---------- post-install verification ----------
+# The installer used to stop at `chmod +x` and declare success. On Apple
+# Silicon that is a LIE: an UNSIGNED arm64 Mach-O is SIGKILLed by the kernel
+# at exec time, before main() ever runs — so the binary yields rc=137 and
+# ZERO bytes on both stdout and stderr. That empty-output detail is what makes
+# this class dangerous: a naive check that only scrapes stdout for a version
+# string sees no error text and passes. The check must therefore EXECUTE the
+# binary and require BOTH rc=0 AND non-empty output; either alone is a false
+# green.
+#
+# Re-verified live 2026-08-05 against the published v0.1.7 darwin-arm64 asset
+# (sha 1191be25…, matches the release SHA256SUMS), xattrs cleared so quarantine
+# is not a variable — one variable changed, outcome flips:
+#   as published (unsigned)                  -> rc=137, 0 bytes
+#   SAME BYTES, `codesign -s - --force`      -> rc=0,   "0.1.7"
+#   SAME BYTES, ad-hoc + `-o runtime`, no ent-> rc=133, 0 bytes
+VERIFY_TIMEOUT="${UNBLOCK_VERIFY_TIMEOUT:-20}"
+# A non-numeric budget would make the watchdog's `sleep` fail, silently
+# removing the cap. Fall back rather than lose it.
+case "$VERIFY_TIMEOUT" in
+  ''|*[!0-9]*|0) warn "ignoring invalid UNBLOCK_VERIFY_TIMEOUT='${VERIFY_TIMEOUT}' — using 20s"
+                 VERIFY_TIMEOUT=20 ;;
+esac
+
+# run_capped <outfile> <cmd> [args...] — run under a wall-clock cap, combined
+# output to <outfile>, exit status echoed to stdout.
+#
+# Stock macOS has no timeout(1), so the cap is a plain background watchdog. Two
+# properties are load-bearing:
+#   * a watchdog kill is reported as 124 (timeout(1)'s convention), NEVER 137.
+#     Mistaking our own SIGKILL for the kernel's would misdiagnose the exact
+#     bug this function exists to catch.
+#   * stdin is /dev/null. Under `curl … | sh` the SCRIPT ITSELF is on stdin; a
+#     child that reads stdin would swallow the rest of the installer.
+run_capped() {
+  cap_out="$1"; shift
+  cap_flag="${TMP_DIR}/verify.timedout"
+  rm -f "$cap_flag" 2>/dev/null || true
+  : > "$cap_out" 2>/dev/null || true
+
+  "$@" >"$cap_out" 2>&1 </dev/null &
+  cap_pid=$!
+  # STDOUT MUST BE REDIRECTED HERE. run_capped is called inside $(...), so this
+  # backgrounded block inherits the write end of that command-substitution pipe.
+  # `kill "$cap_watch"` reaps the subshell but NOT the `sleep` it is blocked in;
+  # the orphaned sleep keeps the pipe open, so $(...) cannot return until the
+  # full budget elapses. Without `>/dev/null` the cap becomes a FLOOR and every
+  # install stalls for VERIFY_TIMEOUT on success as well as failure.
+  { sleep "$VERIFY_TIMEOUT"
+    if kill -0 "$cap_pid" 2>/dev/null; then
+      : > "$cap_flag"
+      kill -9 "$cap_pid" 2>/dev/null || true
+    fi
+  } </dev/null >/dev/null 2>/dev/null &
+  cap_watch=$!
+
+  cap_status=0
+  wait "$cap_pid" 2>/dev/null || cap_status=$?
+  kill "$cap_watch" 2>/dev/null || true
+  wait "$cap_watch" 2>/dev/null || true
+  if [ -f "$cap_flag" ]; then cap_status=124; fi
+  echo "$cap_status"
+}
+
+# Print the cause-specific diagnosis for a failed verification.
+#
+# There are TWO silent-death exit codes in this family. They are identical from
+# the user's seat (no output whatsoever) and they need OPPOSITE fixes, so they
+# must never be collapsed into one message:
+#
+#   137 = 128+9  SIGKILL — unsigned arm64. The arm64 kernel refuses to map
+#                 unsigned code. ANY signature fixes it, even ad-hoc.
+#   133 = 128+5  SIGTRAP — signed WITH the hardened runtime but with no
+#                 entitlements, so the JIT the embedded engine needs is denied.
+#                 Fixed by com.apple.security.cs.allow-jit, NOT by re-signing.
+#
+# A user told "unsigned" when the real problem is entitlements will go re-sign
+# a binary that is already signed and get nowhere.
+explain_verify_failure() {
+  bin="$1"; vrc="$2"; vos="$3"; varch="$4"
+
+  if [ "$vos" = "darwin" ] && have codesign; then
+    csline="$(codesign -dv "$bin" 2>&1 | grep -E 'not signed|CodeDirectory' | head -n1 || true)"
+    [ -n "$csline" ] && err "  codesign says: ${csline}"
+  fi
+
+  case "$vrc" in
+    137)
+      if [ "$vos" = "darwin" ] && [ "$varch" = "arm64" ]; then
+        err "CAUSE: this arm64 binary is not code-signed."
+        err "  Apple Silicon SIGKILLs unsigned arm64 code at exec time, before the"
+        err "  program starts — which is why there is no output at all to read."
+        err "  This is NOT Gatekeeper, NOT quarantine, and NOT an out-of-memory kill;"
+        err "  the download itself was sha256-verified against the published sums."
+        err "WHAT YOU CAN DO NOW:"
+        err "  1. Ad-hoc sign the copy already on disk — that alone makes it run:"
+        err "       codesign -s - --force '${bin}' && '${bin}' --version"
+        err "     Re-running this installer would overwrite that signature with a"
+        err "     fresh unsigned download, so put it on PATH by hand instead:"
+        err "       export PATH=\"${INSTALL_DIR}:\$PATH\""
+        err "  2. Or install the last release known to run as published:"
+        err "       curl -fsSL https://install.kaeva.app | UNBLOCK_VERSION=v0.1.5 sh"
+      else
+        err "CAUSE: the process was SIGKILLed (137) by the OS."
+        err "  On this platform that usually means out-of-memory or an external"
+        err "  kill (container memory cap, cgroup limit, security agent)."
+        err "WHAT YOU CAN DO NOW: re-run with more free memory, then run"
+        err "  '${bin} --version' by hand to see whether it survives."
+      fi
+      ;;
+    133)
+      if [ "$vos" = "darwin" ]; then
+        err "CAUSE: the binary is signed WITH the hardened runtime but is missing the"
+        err "  JIT entitlement, so its JavaScript engine is denied the executable"
+        err "  memory it needs and traps (SIGTRAP) instantly. The signature is FINE —"
+        err "  re-signing alone will not fix this; the entitlement is what is missing."
+        err "WHAT YOU CAN DO NOW:"
+        err "  1. Re-sign without the hardened runtime, which drops the restriction:"
+        err "       codesign -s - --force '${bin}' && '${bin}' --version"
+        err "  2. Or re-sign keeping the runtime and granting JIT:"
+        err "       com.apple.security.cs.allow-jit (in --entitlements)"
+      else
+        err "CAUSE: the process took SIGTRAP (133) and died before reporting."
+        err "  On ${vos} that is a build/runtime fault, not a signing problem."
+        err "WHAT YOU CAN DO NOW: run '${bin} --version' by hand and report the"
+        err "  output at https://github.com/${REPO}/issues"
+      fi
+      ;;
+    124)
+      err "CAUSE: the binary did not finish '--version' within ${VERIFY_TIMEOUT}s and was"
+      err "  stopped. It may be hung on a network call or waiting on input."
+      err "WHAT YOU CAN DO NOW: run '${bin} --version' by hand to watch it, or"
+      err "  re-run with a longer budget: UNBLOCK_VERIFY_TIMEOUT=60"
+      ;;
+    126|127)
+      err "CAUSE: the file could not be executed at all (${vrc}) — wrong platform"
+      err "  build, a missing loader/library, or a noexec mount at ${INSTALL_DIR}."
+      err "WHAT YOU CAN DO NOW: check 'file ${bin}' matches ${vos}-${varch}, and"
+      err "  install somewhere executable: UNBLOCK_INSTALL_DIR=/some/dir"
+      ;;
+    *)
+      if [ "$vrc" -gt 128 ] 2>/dev/null; then
+        err "CAUSE: killed by signal $((vrc - 128)) before it could report a version."
+      else
+        err "CAUSE: the binary ran but did not report a version cleanly."
+      fi
+      err "WHAT YOU CAN DO NOW: run '${bin} --version' by hand and report the"
+      err "  output at https://github.com/${REPO}/issues"
+      ;;
+  esac
+}
+
+# Execute the freshly-installed binary. Returns 0 only if it truly works.
+verify_install() {
+  bin="$1"; want="$2"; vos="$3"; varch="$4"
+
+  if [ -n "${UNBLOCK_NO_VERIFY:-}" ]; then
+    warn "UNBLOCK_NO_VERIFY set — skipping the post-install execution check."
+    warn "the binary at ${bin} has NOT been proven to run on this machine."
+    return 0
+  fi
+
+  log "verifying the installed binary actually runs"
+  vout="${TMP_DIR}/verify.out"
+  vrc="$(run_capped "$vout" "$bin" --version)"
+  # Command substitution strips trailing newlines, so a binary that emits only
+  # whitespace reads as empty here — which is the honest answer.
+  vtext="$(cat "$vout" 2>/dev/null || true)"
+
+  if [ "$vrc" = "0" ] && [ -n "$vtext" ]; then
+    log "verified: it executes and reports \"$(head -n1 "$vout")\""
+    return 0
+  fi
+
+  if [ -n "$vtext" ]; then
+    shown="$(head -n3 "$vout" | tr '\n' ' ')"
+  else
+    shown="<none — zero bytes on stdout AND stderr>"
+  fi
+
+  err "POST-INSTALL VERIFICATION FAILED — ${BIN_NAME} ${want} was placed at"
+  err "  ${bin} but it does not run on this machine, so the install is NOT usable."
+  err "  command:   ${bin} --version"
+  err "  exit code: ${vrc}"
+  err "  output:    ${shown}"
+  explain_verify_failure "$bin" "$vrc" "$vos" "$varch"
+  err "Tracking issue: https://github.com/${REPO}/issues/20"
+  if [ "${REPLACED_PRIOR:-0}" = "1" ]; then
+    err "(THIS WAS AN UPGRADE: a binary already existed at ${bin} and has been"
+    err "  OVERWRITTEN by this broken one, so ${BIN_NAME} on your PATH is now"
+    err "  non-functional. To get back to a working state immediately, reinstall a"
+    err "  known-good version:  UNBLOCK_VERSION=v0.1.5 curl -fsSL https://install.kaeva.app | sh"
+    err "  Nothing under ~/.unblock was modified.)"
+  else
+    err "(Your shell rc files were left untouched — a broken install does not get"
+    err "  wired into your PATH. Nothing under ~/.unblock was modified.)"
+  fi
+  return 1
 }
 
 # ---------- main ----------
@@ -338,6 +548,14 @@ main() {
   # The target can be mid-execution elsewhere or transiently locked — retry
   # briefly, then tell the truth: a failed swap over an already-satisfying
   # binary is the exit-2 case, never a false red on a healthy box.
+  # Did a binary already live here? Decides whether a failed verification means
+  # "nothing was wired up" (fresh install) or "we just replaced something that
+  # worked" (upgrade) — the two need opposite advice, and telling an upgrader
+  # their PATH is untouched is false: mv -f below overwrites in place.
+  REPLACED_PRIOR=0
+  [ -e "$install_path" ] && REPLACED_PRIOR=1
+  export REPLACED_PRIOR
+
   swapped=0
   for attempt in 1 2 3; do
     if mv -f "$asset_path" "$install_path" 2>/dev/null; then swapped=1; break; fi
@@ -354,6 +572,13 @@ main() {
   fi
   chmod +x "$install_path"
   log "installed to ${install_path}"
+
+  # Prove it before promising it. Deliberately BEFORE add_to_path_rc: an
+  # install that cannot run must not be wired into the user's shell rc, and
+  # every remedy printed on failure uses the absolute path anyway.
+  if ! verify_install "$install_path" "$remote_tag" "$os" "$arch"; then
+    exit 1
+  fi
 
   add_to_path_rc "$INSTALL_DIR"
 

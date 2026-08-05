@@ -30,10 +30,35 @@ Hosting source for **install.kaeva.app** — the UNBLOCK download surface, one p
 | 2 | If `unblock` is already on PATH and its `--version` is ≥ the latest GitHub release, exit `2`. |
 | 3 | Download `unblock-<os>-<arch>[.exe]` from the latest release of `Kaeva-labs/unblock-install`. |
 | 4 | SHA256-verify against `SHA256SUMS` published alongside the release. |
-| 5 | Install:<br>• Linux/macOS → `$HOME/.local/bin/unblock` (chmod +x; prepended to PATH via shell rc).<br>• Windows → `$env:LOCALAPPDATA\unblock\unblock.exe` (added to USER PATH via `[Environment]::SetEnvironmentVariable`). |
-| 6 | Print onboarding hint pointing the user at `unblock login` / `unblock initialize`. |
+| 5 | Install:<br>• Linux/macOS → `$HOME/.local/bin/unblock` (chmod +x).<br>• Windows → `$env:LOCALAPPDATA\unblock\unblock.exe`. |
+| 6 | **Linux/macOS only:** RUN the installed binary and require **both** `rc=0` **and** non-empty output. If it does not run, fail with a cause-specific error and do **not** touch shell rc files. |
+| 7 | Add to PATH (shell rc on Linux/macOS; USER PATH via `[Environment]::SetEnvironmentVariable` on Windows), then print the onboarding hint pointing the user at `unblock login` / `unblock initialize`. |
 
-Exit codes: `0` ok · `1` failure · `2` already installed (skipped).
+Exit codes: `0` ok · `1` failure (including *installed but does not execute*) · `2` already installed (skipped).
+
+### Why step 6 executes the binary
+
+A downloaded, sha-verified, `chmod +x`'d file is **not** a working CLI. On Apple
+Silicon an **unsigned arm64** Mach-O is SIGKILLed by the kernel before the
+program starts, so it returns **rc=137 with zero bytes on stdout and stderr** —
+which means a check that only scrapes stdout for a version string sees no error
+text and passes it (see [#20](https://github.com/Kaeva-labs/unblock-install/issues/20)).
+Hence *both* conditions.
+
+Two silent-death codes are distinguished, because they need opposite fixes:
+
+| exit | signal | cause | fix |
+|------|--------|-------|-----|
+| `137` | SIGKILL | unsigned arm64 binary | any signature, even ad-hoc `codesign -s - --force` |
+| `133` | SIGTRAP | signed **with** hardened runtime, no entitlements → JIT denied | `com.apple.security.cs.allow-jit` (the signature is already fine) |
+
+`install.sh` env knobs: `UNBLOCK_VERSION` · `UNBLOCK_INSTALL_DIR` ·
+`UNBLOCK_NO_MODIFY_PATH` · `UNBLOCK_LATEST_URL` · `UNBLOCK_NO_VERIFY` (skip
+step 6, warns loudly) · `UNBLOCK_VERIFY_TIMEOUT` (default `20` seconds).
+
+> **Parity gap:** `install.ps1` does not yet run step 6. Windows has no
+> equivalent kernel signature requirement, so it is not the same P0 — but the
+> "never executes what it installed" gap is the same shape and is still open.
 
 ## Repo layout
 
