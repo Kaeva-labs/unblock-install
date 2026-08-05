@@ -8,6 +8,30 @@
 #   - second run with same version exits 2 (idempotency)
 #   - bad SHA256 in SHA256SUMS causes exit 1
 
+# ── WINDOWS-ONLY BY CONSTRUCTION. Loud-skip anywhere else. ──────────────────
+#
+# install.ps1 is the WINDOWS installer: it writes to $env:LOCALAPPDATA and
+# installs unblock.exe. PowerShell 7 (pwsh) is cross-platform, so "a PowerShell
+# host exists" is NOT the same question as "this installer can run here" — and
+# conflating the two is what made gate.sh run this suite on a Linux runner,
+# where all five tests failed for the entirely uninteresting reason that
+# LOCALAPPDATA does not exist.
+#
+# Skipping LOUDLY rather than passing silently: a green tick that means "we
+# never tested Windows" is worse than a visible gap, and this repo has been
+# bitten once already by a manual step nobody executed (see #20).
+#
+# The PARSE check in gate.sh runs everywhere and is unaffected — syntax errors
+# in install.ps1 are still caught on every runner. Only the behavioural suite
+# is gated here.
+if ($null -ne $IsWindows -and -not $IsWindows) {
+  Write-Host "SKIPPED (LOUD): Test-InstallPs1.ps1 is Windows-only — install.ps1 targets"
+  Write-Host "                `$env:LOCALAPPDATA and unblock.exe, neither of which exists on"
+  Write-Host "                $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription.Trim())."
+  Write-Host "                Windows-side behavioural coverage is NOT running here."
+  exit 0
+}
+
 $ErrorActionPreference = 'Stop'
 
 $Here       = Split-Path -Parent $MyInvocation.MyCommand.Path
