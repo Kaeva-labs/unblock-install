@@ -1,0 +1,101 @@
+name: ci
+
+# Why this exists: unblock-install#20 shipped a macOS arm64 binary that was
+# SIGKILLed on every Apple Silicon Mac while the installer reported SUCCESS, and
+# it stayed broken for 15 days. The signing step was manual and nothing executed
+# the artifact afterwards, so nothing could notice. PR#22 added a 15-test suite
+# that catches exactly that class — but the suite only ran on a laptop, which is
+# the same shape of gap one level up. This wires it into CI.
+#
+# The macos-latest leg is the load-bearing one: GitHub's macOS runners are
+# arm64, so it exercises the platform where an unsigned Mach-O is fatal. The
+# ubuntu leg is cheap breadth — the suite detects host os/arch and skips the
+# darwin-arm64-specific assertions rather than failing on them.
+#
+# This repo is PUBLIC, so Actions minutes are free and unlimited here. Note
+# unblock-install#2 ("CI workflows fail with empty steps — GH Free Actions
+# billing block") is STALE for this repo on two counts: a public repo was never
+# subject to that cap, and private unblock_auth has had green committed-workflow
+# CI since #29 (2026-08-02) anyway.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push to the same PR makes the first run irrelevant.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  suite:
+    name: install.sh suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Never let one platform's failure hide the other's result — the whole
+      # point is that darwin-arm64 behaves differently from everything else.
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report host platform
+        # The suite's assertions branch on os/arch, so record what this runner
+        # actually is. A silent platform change is how coverage disappears.
+        run: |
+          echo "uname -s: $(uname -s)"
+          echo "uname -m: $(uname -m)"
+          echo "shell:    $(sh --version 2>&1 | head -n1 || echo 'sh (no --version)')"
+
+      - name: Static checks (bash -n / dash -n)
+        run: |
+          bash -n install.sh
+          if command -v dash >/dev/null 2>&1; then
+            dash -n install.sh
+          else
+            echo "::notice::dash not present on this runner — POSIX parse leg skipped here"
+          fi
+
+      - name: Integration suite
+        # Each leg gets its own port so concurrent matrix jobs cannot collide on
+        # the fixture server, and so a leaked server from a prior run is visible
+        # as a bind failure rather than silently serving stale assets.
+        env:
+          SERVER_PORT: 8971
+        run: bash tests/test_install_sh.sh
+
+      - name: Integration suite under dash (POSIX entrypoint)
+        # install.sh is piped to `sh`. On Ubuntu /bin/sh IS dash, so this leg is
+        # the real-world shell; on macOS it is a genuine second shell. A bashism
+        # that only bites POSIX users is exactly the defect this catches.
+        if: runner.os == 'Linux'
+        env:
+          SERVER_PORT: 8973
+          INSTALL_TEST_SHELL: /bin/dash
+        run: bash tests/test_install_sh.sh
+
+  gate:
+    name: gate.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run the repo gate
+        # gate.sh loud-skips legs whose tooling is absent (dash, pwsh) rather
+        # than passing silently — read the log for SKIPPED lines, they are real
+        # coverage gaps, not noise.
+        env:
+          SERVER_PORT: 8975
+        run: bash gate.sh
