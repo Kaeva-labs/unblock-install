@@ -80,14 +80,16 @@
     <summary>All platforms</summary>
     <ul id="desktop-list"></ul>
   </details>
+  <!-- Trust policy: this page NEVER coaches clicking through an OS security
+       warning. If a build would trigger SmartScreen/Gatekeeper, it does not
+       ship through this button — the browser download opens only for builds
+       your OS verifies cleanly. (curl|sh installs carry no quarantine and are
+       the CLI card's path, not this one's.) -->
   <details id="desktop-unsigned" hidden>
-    <summary>&ldquo;Windows protected your PC&rdquo; / &ldquo;Apple could not verify&rdquo;?</summary>
-    <p><small>The beta binary is not code-signed yet, so Windows and macOS will warn on first run:</small></p>
-    <ul>
-      <li><small><strong>Windows (SmartScreen):</strong> click <em>More info</em> &rarr; <em>Run anyway</em>.</small></li>
-      <li><small><strong>macOS (Gatekeeper):</strong> right-click the app &rarr; <em>Open</em> &rarr; <em>Open</em>,
-          or allow it under System&nbsp;Settings &rarr; Privacy&nbsp;&amp;&nbsp;Security &rarr; <em>Open&nbsp;Anyway</em>.</small></li>
-    </ul>
+    <summary>Is this download safe?</summary>
+    <p><small>Desktop builds offered here are code-signed so Windows and macOS verify them
+       on first run — if your OS shows a security warning for an UNBLOCK download,
+       <strong>stop and don&rsquo;t override it</strong>; tell us instead.</small></p>
     <p><small>Every release publishes SHA-256 checksums alongside the installer — verify your download against them.</small></p>
   </details>
   <noscript><p class="muted">Direct download links need JavaScript — use the web app or CLI below instead.</p></noscript>
