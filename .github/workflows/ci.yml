@@ -99,3 +99,35 @@ jobs:
         env:
           SERVER_PORT: 8975
         run: bash gate.sh
+
+  real-release:
+    # The fixture suite above is hermetic BY DESIGN — which means it can be
+    # green while the actually-published release is dead (exactly how #20's
+    # binary SIGKILLed for 15 days under green checks). This job closes that
+    # gap: it runs the REAL install.sh against the REAL latest release and
+    # EXECUTES the installed binary. macos-latest is arm64 — the platform
+    # where an unsigned Mach-O is fatal — so a dead published artifact turns
+    # this job red within one run.
+    name: real release installs and runs (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the real latest release and execute it
+        # No UNBLOCK_NO_VERIFY here, ever: the whole point is that the
+        # installer's own post-install execution check must pass against
+        # the published artifact. Belt-and-braces: we ALSO execute the
+        # binary ourselves and require a version string, so this job stays
+        # honest even if the installer's check regresses.
+        env:
+          UNBLOCK_INSTALL_DIR: ${{ runner.temp }}/unblock-bin
+          UNBLOCK_NO_MODIFY_PATH: '1'
+        run: |
+          sh install.sh
+          out="$("$UNBLOCK_INSTALL_DIR/unblock" --version)"
+          test -n "$out"
+          echo "installed real release executes: version [$out]"
