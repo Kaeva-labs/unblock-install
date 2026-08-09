@@ -229,6 +229,21 @@ This repo is wired to **`install.kaeva.app`** via Cloudflare Pages:
 3. **Custom domains** → add `install.kaeva.app` (CNAME to `<project>.pages.dev`, orange-cloud proxied for auto-cert).
 4. The Pages Function at `functions/index.js` handles UA-based content negotiation for `/`.
 
+> ⚠️ **The live project is NOT git-connected today — it is deploy-by-hand — and its
+> `build_config.destination_dir` is currently `dist`, NOT the `/` this doc specifies (measured
+> 2026-08-08).** This repo serves from the ROOT (`install.sh`, `functions/`, `landing.html` are
+> all top-level; there is no `dist/`). Manual `wrangler pages deploy .` ignores `destination_dir`
+> so it works, but **connecting the existing project to git as-is would build and publish an empty
+> `dist/`, taking install.kaeva.app DOWN.** Before you connect: verify with
+> `GET /accounts/<acct>/pages/projects/unblock-install` → `build_config.destination_dir`, set it to
+> `/` (root) with no build command FIRST, then connect. The `destination_dir` prerequisite is the
+> part that bites, not the OAuth step.
+>
+> Also, deploy-by-hand only: run `wrangler pages deploy .` from **inside** this checkout — never
+> `wrangler pages deploy <this-dir>` from another project's directory, which bundles *that*
+> project's `functions/` (the static assets upload correctly but every `/api/*` then serves the
+> wrong app's routes).
+
 ## Local testing
 
 ```sh
