@@ -85,7 +85,7 @@ jobs:
 
   gate:
     name: gate.sh
-    runs-on: tenki-standard-medium-4c-8g
+    runs-on: tenki-standard-small-2c-4g
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
