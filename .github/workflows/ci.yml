@@ -42,7 +42,7 @@ jobs:
       # point is that darwin-arm64 behaves differently from everything else.
       fail-fast: false
       matrix:
-        os: [macos-latest, tenki-standard-small-2c-4g]
+        os: [macos-latest, tenki-standard-medium-4c-8g]
     timeout-minutes: 15
 
     steps:
@@ -85,7 +85,7 @@ jobs:
 
   gate:
     name: gate.sh
-    runs-on: tenki-standard-small-2c-4g
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -113,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, tenki-standard-small-2c-4g]
+        os: [macos-latest, tenki-standard-medium-4c-8g]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
