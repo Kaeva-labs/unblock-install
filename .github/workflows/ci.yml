@@ -42,7 +42,7 @@ jobs:
       # point is that darwin-arm64 behaves differently from everything else.
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, tenki-standard-small-2c-4g]
     timeout-minutes: 15
 
     steps:
@@ -113,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, tenki-standard-small-2c-4g]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
