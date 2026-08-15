@@ -8,11 +8,78 @@
 // releases — install.sh/install.ps1 resolve `releases/latest` of THAT repo for
 // the CLI, and a desktop release becoming "latest" would break the CLI installer.
 //
-// Until a public desktop release exists this returns { available: false } and
-// the landing page shows an honest "in final assembly" state. The moment a
-// public release with Tauri bundle assets lands, this lights up unchanged.
+// A TRANSPORT ERROR MUST NEVER MASQUERADE AS "NO RELEASE". Live resolution calls
+// api.github.com from Cloudflare Pages egress with NO credentials (no GITHUB_TOKEN
+// is provisioned, and no appropriately-narrow token exists to provision), so it
+// shares that edge IP's 60 req/hr GitHub limit and 403s under normal traffic. The
+// pre-v2 resolver answered those 403s with { available: false } AND cached that
+// body for 5 minutes — which is why the install.kaeva.app watchdog went red on
+// roughly every other run while a public desktop release existed the whole time.
+//
+// v2 closes that structurally, without any credential:
+//   1. LAST_KNOWN_GOOD below is served (available: true, "resolved": "fallback")
+//      whenever live resolution fails for ANY reason, so the download door never
+//      shuts because GitHub rate-limited an edge IP.
+//   2. ONLY a genuine live success is written to the edge cache — a transient
+//      403 can no longer be pinned in front of every visitor for 5 minutes.
+//   3. Every response carries X-Desktop-Resolver: v2 and X-Desktop-Resolved:
+//      live|fallback|none, so which path answered is verifiable from outside.
+// The `reason` field is never dropped: a fallback body still says why live
+// resolution did not answer.
+//
+// MAINTENANCE: LAST_KNOWN_GOOD is a hand-checked snapshot of a real published
+// release (verified against the GitHub API on the date noted). Refresh it — tag,
+// urls, sizes, published_at — whenever a newer desktop release ships, or a
+// rate-limited edge will hand users an older build than the live path would.
 
 export const DESKTOP_REPO_DEFAULT = 'Kaeva-labs/unblock';
+
+// Last-known-good desktop release, inline ON PURPOSE: Cloudflare Pages routes
+// every file under functions/ as a route, so this manifest cannot live in a
+// sibling module without also becoming a public endpoint.
+// Verified against api.github.com 2026-08-15 (tag desktop-v0.1.0, draft:false).
+export const LAST_KNOWN_GOOD = Object.freeze({
+  repo: 'Kaeva-labs/unblock',
+  version: 'desktop-v0.1.0',
+  prerelease: false,
+  published_at: '2026-08-15T03:36:35Z',
+  platforms: Object.freeze({
+    'macos-arm64': Object.freeze({
+      name: 'UNBLOCK-0.1.0-macos-arm64.dmg',
+      url: 'https://github.com/Kaeva-labs/unblock/releases/download/desktop-v0.1.0/UNBLOCK-0.1.0-macos-arm64.dmg',
+      size: 45291128,
+    }),
+    'windows-x64': Object.freeze({
+      name: 'UNBLOCK_0.1.0_x64-setup.exe',
+      url: 'https://github.com/Kaeva-labs/unblock/releases/download/desktop-v0.1.0/UNBLOCK_0.1.0_x64-setup.exe',
+      size: 29206896,
+    }),
+  }),
+});
+
+// Body served when live resolution could not answer. The snapshot describes ONE
+// specific repo, so a DESKTOP_REPO pointed elsewhere gets an honest unavailable
+// rather than another repo's binaries served under its name — the fallback must
+// not become a second way to lie.
+export function fallbackBody(repo, reason) {
+  if (repo !== LAST_KNOWN_GOOD.repo) {
+    return { available: false, resolved: 'none', source: 'github.com/' + repo, reason };
+  }
+  const platforms = {};
+  for (const [k, v] of Object.entries(LAST_KNOWN_GOOD.platforms)) {
+    platforms[k] = { name: v.name, url: v.url, size: v.size };
+  }
+  return {
+    available: true,
+    resolved: 'fallback',
+    version: LAST_KNOWN_GOOD.version,
+    prerelease: LAST_KNOWN_GOOD.prerelease,
+    published_at: LAST_KNOWN_GOOD.published_at,
+    source: 'github.com/' + repo,
+    reason,
+    platforms,
+  };
+}
 
 // Map GitHub release assets (Tauri v2 bundle outputs) to platform slots.
 // Lower rank wins within a slot. Deliberately ignores bare `.exe` files that
@@ -76,6 +143,7 @@ export async function onRequest(context) {
 
   // Edge-cache 5 min: dodges the unauthenticated GitHub API 60 req/hr/IP limit
   // and keeps Pages Function invocations off the hot path on a launch spike.
+  // Only LIVE successes are ever written here — see the cache.put below.
   const cache = globalThis.caches && globalThis.caches.default;
   const cacheKey = new Request(new URL(context.request.url).origin + '/api/desktop?repo=' + repo);
   if (cache) {
@@ -88,13 +156,20 @@ export async function onRequest(context) {
     'Accept': 'application/vnd.github+json',
   };
   // Authenticate to GitHub when a token is present. Unauthenticated calls share
-  // the CF edge IP's 60 req/hr GitHub limit and 403 under normal traffic (the
-  // desktop card then shows "final assembly" even though a release exists); a
-  // read-only token lifts the limit to 5000/hr. Inert without the env var, so
-  // shipping this ahead of GITHUB_TOKEN being provisioned is a safe no-op.
+  // the CF edge IP's 60 req/hr GitHub limit and 403 under normal traffic; a
+  // read-only token lifts that to 5000/hr and keeps this on the LIVE path. Inert
+  // without the env var — none is provisioned today, which is precisely why the
+  // fallback above must carry the door. A token is an optimisation here, no
+  // longer a correctness dependency.
   const ghToken = context.env && context.env.GITHUB_TOKEN;
   if (ghToken) GH_HEADERS['Authorization'] = 'Bearer ' + ghToken;
-  let body = { available: false, source: 'github.com/' + repo, reason: 'no public desktop release yet' };
+
+  // `live` is set ONLY by a genuine live resolution that yielded platform slots.
+  // Everything else — 403, 404, network throw, malformed JSON, asset-less
+  // release — leaves it null and funnels to the fallback, with `reason` carrying
+  // what actually happened.
+  let live = null;
+  let reason = 'no public desktop release resolved';
   try {
     // releases/latest EXCLUDES prereleases (404 on a prerelease-only repo, which
     // is exactly the beta state: v0.1.0-beta is prerelease:true). Try it first,
@@ -109,17 +184,20 @@ export async function onRequest(context) {
         const rels = await list.json();
         const found = pickRelease(Array.isArray(rels) ? rels : []);
         if (found) rel = found.rel;
-        else body.reason = 'no non-draft release with desktop bundle assets on ' + repo;
+        else reason = 'no non-draft release with desktop bundle assets on ' + repo;
       } else {
-        // 404 = repo private or missing — the expected pre-launch state.
-        body.reason = 'github releases -> HTTP ' + list.status;
+        // 403 = the unauthenticated rate limit this repo's egress IP shares;
+        // 404 = repo private or missing. BOTH are statements about the transport,
+        // never evidence that no release exists — hence the fallback below.
+        reason = 'github releases -> HTTP ' + list.status + ' (releases/latest -> HTTP ' + latest.status + ')';
       }
     }
     if (rel) {
       const platforms = pickAssets(rel.assets);
       if (Object.keys(platforms).length > 0) {
-        body = {
+        live = {
           available: true,
+          resolved: 'live',
           version: rel.tag_name,
           prerelease: !!rel.prerelease,
           published_at: rel.published_at,
@@ -127,21 +205,28 @@ export async function onRequest(context) {
           platforms,
         };
       } else {
-        body.reason = 'release ' + rel.tag_name + ' has no desktop bundle assets';
+        reason = 'release ' + rel.tag_name + ' has no desktop bundle assets';
       }
     }
   } catch (e) {
-    body.reason = 'github api unreachable: ' + ((e && e.message) || String(e));
+    reason = 'github api unreachable: ' + ((e && e.message) || String(e));
   }
 
+  const body = live || fallbackBody(repo, reason);
   const resp = new Response(JSON.stringify(body), {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
-      'Cache-Control': 'public, max-age=300',
+      // A non-live body is deliberately short-lived downstream: it must not
+      // outlive the next successful live resolution by more than a minute.
+      'Cache-Control': live ? 'public, max-age=300' : 'public, max-age=60',
       'Access-Control-Allow-Origin': '*',
       'X-Served-By': 'unblock-install/functions/api/desktop.js',
+      'X-Desktop-Resolver': 'v2',
+      'X-Desktop-Resolved': body.resolved,
     },
   });
-  if (cache && context.waitUntil) context.waitUntil(cache.put(cacheKey, resp.clone()));
+  // LIVE SUCCESSES ONLY. Caching a failure body is what turned one rate-limited
+  // GitHub call into 5 minutes of "no desktop release" for every visitor.
+  if (live && cache && context.waitUntil) context.waitUntil(cache.put(cacheKey, resp.clone()));
   return resp;
 }
