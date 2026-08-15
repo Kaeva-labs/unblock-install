@@ -1,7 +1,7 @@
 // node tests/test_desktop_api.mjs — pure-function tests for the /api/desktop
 // asset matcher. No network, no CF runtime.
 import assert from 'node:assert/strict';
-import { pickAssets, pickRelease, onRequest } from '../functions/api/desktop.js';
+import { pickAssets, pickRelease, onRequest, fallbackBody, LAST_KNOWN_GOOD } from '../functions/api/desktop.js';
 
 const A = (name) => ({ name, browser_download_url: 'https://gh/' + name, size: 1 });
 let failures = 0;
@@ -146,6 +146,199 @@ await tAsync('onRequest sends NO Authorization when GITHUB_TOKEN is absent', () 
   assert.ok(rec.length >= 1, 'expected at least one GitHub call');
   for (const c of rec) assert.equal(c.auth, null, 'no token -> no Authorization header: ' + c.url);
 }));
+
+// --- v2 resolver: a transport error must never masquerade as "no release" ---
+//
+// The defect these guard: api.github.com is called UNAUTHENTICATED from the
+// Cloudflare Pages egress IP, which shares GitHub's 60 req/hr/IP limit and 403s
+// under normal traffic. The pre-v2 resolver answered those 403s with
+// { available: false } AND cached that body for 5 minutes — so the install
+// watchdog (unblock_e2e tests/install.spec.ts) went red on ~every other run
+// while a public desktop release existed the whole time.
+
+// Pre-v2 failure funnel, vendored from functions/api/desktop.js @ a1c0766.
+// It is here as a POSITIVE CONTROL ON THE MOCK: a reproducer that cannot go red
+// proves nothing, so the same 403 stub must first be shown to drive the OLD code
+// to available:false before the NEW code is credited with surviving it.
+async function legacyResolve(repo) {
+  let body = { available: false, source: 'github.com/' + repo, reason: 'no public desktop release yet' };
+  try {
+    let rel = null;
+    const latest = await fetch('https://api.github.com/repos/' + repo + '/releases/latest', { headers: {} });
+    if (latest.ok) {
+      rel = await latest.json();
+    } else {
+      const list = await fetch('https://api.github.com/repos/' + repo + '/releases?per_page=10', { headers: {} });
+      if (list.ok) {
+        const found = pickRelease(await list.json());
+        if (found) rel = found.rel;
+      } else {
+        body.reason = 'github releases -> HTTP ' + list.status;
+      }
+    }
+    if (rel) {
+      const platforms = pickAssets(rel.assets);
+      if (Object.keys(platforms).length > 0) body = { available: true, version: rel.tag_name, platforms };
+    }
+  } catch (e) {
+    body.reason = 'github api unreachable: ' + ((e && e.message) || String(e));
+  }
+  return body;
+}
+
+// GitHub answering 403 — the exact shared-rate-limit shape CF Pages egress hits.
+const ghRateLimited = (rec) => async (url) => {
+  rec.push(String(url));
+  return { ok: false, status: 403, json: async () => ({ message: 'API rate limit exceeded for <ip>.' }) };
+};
+
+// GitHub healthy. Tag/urls/sizes are deliberately NOTHING like LAST_KNOWN_GOOD,
+// so "live data was served" and "the fallback was served" cannot be confused —
+// a fix that always fails safe would pass its own reproducer with zero
+// information, and this is the leg that catches that.
+const LIVE_ONLY_URL = 'https://gh-live.example/UNBLOCK-9.9.9-macos-arm64.dmg';
+const ghHealthy = (rec) => async (url) => {
+  rec.push(String(url));
+  return { ok: true, status: 200, json: async () => ({
+    tag_name: 'desktop-v9.9.9', draft: false, prerelease: false,
+    published_at: '2099-01-01T00:00:00Z',
+    assets: [
+      { name: 'UNBLOCK-9.9.9-macos-arm64.dmg', browser_download_url: LIVE_ONLY_URL, size: 777 },
+      { name: 'UNBLOCK_9.9.9_x64-setup.exe', browser_download_url: 'https://gh-live.example/w.exe', size: 888 },
+    ],
+  }) };
+};
+
+// Recording edge-cache stub: every cache.put is captured so "never cache a
+// failure" is asserted on the WRITE, not inferred from the response body.
+function makeCache() {
+  const puts = [];
+  const api = { default: {
+    match: async () => null,
+    put: async (key, resp) => puts.push({
+      key: String(key && key.url ? key.url : key),
+      resolved: resp.headers.get('X-Desktop-Resolved'),
+      body: JSON.parse(await resp.text()),
+    }),
+  } };
+  return { puts, api };
+}
+
+async function runResolver({ fetchImpl, env = {}, cache = null }) {
+  const origFetch = globalThis.fetch, origCaches = globalThis.caches;
+  globalThis.fetch = fetchImpl;
+  globalThis.caches = cache;              // null -> resolver skips the edge cache
+  const pending = [];
+  try {
+    const resp = await onRequest({
+      env,
+      request: { url: 'https://install.kaeva.app/api/desktop' },
+      waitUntil: (p) => pending.push(p),
+    });
+    await Promise.all(pending);           // cache.put runs before we assert on it
+    return { resp, body: JSON.parse(await resp.text()) };
+  } finally { globalThis.fetch = origFetch; globalThis.caches = origCaches; }
+}
+
+await tAsync('REPRODUCER: under a GitHub 403 the PRE-v2 funnel answers available:false', async () => {
+  const rec = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = ghRateLimited(rec);
+  try {
+    const old = await legacyResolve('Kaeva-labs/unblock');
+    assert.equal(old.available, false, 'pre-v2 code must go red under 403 — otherwise the stub is inert');
+    assert.match(old.reason, /HTTP 403/);
+    assert.ok(rec.length >= 2, 'both GitHub endpoints must have been attempted');
+  } finally { globalThis.fetch = origFetch; }
+});
+
+await tAsync('FIX: under that SAME 403 the v2 resolver serves the last-known-good release', async () => {
+  const { resp, body } = await runResolver({ fetchImpl: ghRateLimited([]) });
+  assert.equal(body.available, true, 'a rate-limited GitHub must never read as "no release"');
+  assert.equal(body.resolved, 'fallback', 'the fallback must announce itself honestly');
+  assert.equal(body.version, 'desktop-v0.1.0');
+  assert.equal(body.prerelease, false);
+  assert.equal(body.published_at, '2026-08-15T03:36:35Z');
+  assert.match(body.reason, /HTTP 403/, 'why live resolution failed must survive into the body');
+  // The two slots unblock_e2e tests/install.spec.ts asserts on, with real bytes.
+  assert.equal(body.platforms['macos-arm64'].url, LAST_KNOWN_GOOD.platforms['macos-arm64'].url);
+  assert.equal(body.platforms['macos-arm64'].size, 45291128);
+  assert.equal(body.platforms['windows-x64'].url, LAST_KNOWN_GOOD.platforms['windows-x64'].url);
+  assert.equal(body.platforms['windows-x64'].size, 29206896);
+  assert.equal(resp.headers.get('X-Desktop-Resolver'), 'v2');
+  assert.equal(resp.headers.get('X-Desktop-Resolved'), 'fallback');
+});
+
+await tAsync('POSITIVE CONTROL: healthy GitHub serves LIVE data and does NOT use the fallback', async () => {
+  const { resp, body } = await runResolver({ fetchImpl: ghHealthy([]) });
+  assert.equal(body.available, true);
+  assert.equal(body.resolved, 'live');
+  assert.equal(body.version, 'desktop-v9.9.9', 'live tag must win — not the frozen snapshot');
+  assert.equal(body.published_at, '2099-01-01T00:00:00Z');
+  assert.equal(body.platforms['macos-arm64'].url, LIVE_ONLY_URL);
+  assert.equal(body.platforms['macos-arm64'].size, 777);
+  assert.equal(body.reason, undefined, 'a live answer has nothing to explain');
+  assert.notEqual(body.version, LAST_KNOWN_GOOD.version);
+  assert.equal(resp.headers.get('X-Desktop-Resolved'), 'live');
+  assert.equal(resp.headers.get('X-Desktop-Resolver'), 'v2');
+});
+
+await tAsync('a fallback body is NEVER written to the edge cache', async () => {
+  const { puts, api } = makeCache();
+  const { body } = await runResolver({ fetchImpl: ghRateLimited([]), cache: api });
+  assert.equal(body.resolved, 'fallback');
+  assert.deepEqual(puts, [], 'caching a failure/fallback pins it in front of every visitor for minutes');
+});
+
+await tAsync('a LIVE success IS written to the edge cache (the cache still works)', async () => {
+  const { puts, api } = makeCache();
+  await runResolver({ fetchImpl: ghHealthy([]), cache: api });
+  assert.equal(puts.length, 1, 'live successes must still be cached — otherwise every hit burns rate limit');
+  assert.equal(puts[0].resolved, 'live');
+  assert.equal(puts[0].body.version, 'desktop-v9.9.9');
+});
+
+await tAsync('a thrown fetch (network unreachable) falls back too, never available:false', async () => {
+  const { body } = await runResolver({ fetchImpl: async () => { throw new Error('connect ECONNREFUSED'); } });
+  assert.equal(body.available, true);
+  assert.equal(body.resolved, 'fallback');
+  assert.match(body.reason, /ECONNREFUSED/);
+});
+
+await tAsync('a live release with no bundle assets also falls back rather than closing the door', async () => {
+  const fetchImpl = async () => ({ ok: true, status: 200, json: async () => ({
+    tag_name: 'desktop-v0.2.0', draft: false, assets: [{ name: 'SHA256SUMS.txt', browser_download_url: 'https://gh/s', size: 1 }],
+  }) });
+  const { body } = await runResolver({ fetchImpl });
+  assert.equal(body.available, true);
+  assert.equal(body.resolved, 'fallback');
+  assert.match(body.reason, /no desktop bundle assets/);
+});
+
+await tAsync('the fallback is repo-scoped: a DESKTOP_REPO override gets an honest unavailable', async () => {
+  const { resp, body } = await runResolver({ fetchImpl: ghRateLimited([]), env: { DESKTOP_REPO: 'someone/else' } });
+  assert.equal(body.available, false, 'never serve one repo\'s binaries under another repo\'s name');
+  assert.equal(body.resolved, 'none');
+  assert.equal(body.source, 'github.com/someone/else');
+  assert.equal(resp.headers.get('X-Desktop-Resolved'), 'none');
+});
+
+t('LAST_KNOWN_GOOD matches the published desktop-v0.1.0 release contract', () => {
+  // Byte-level pins, checked against api.github.com on 2026-08-15. If a newer
+  // desktop release ships, this test is the thing that must be updated with it.
+  assert.deepEqual(Object.keys(LAST_KNOWN_GOOD.platforms).sort(), ['macos-arm64', 'windows-x64']);
+  for (const [slot, a] of Object.entries(LAST_KNOWN_GOOD.platforms)) {
+    assert.ok(a.url.startsWith('https://github.com/Kaeva-labs/unblock/releases/download/desktop-v0.1.0/'), slot + ' url must point at the pinned tag');
+    assert.ok(a.url.endsWith(a.name), slot + ' url must end in its asset name');
+    assert.ok(Number.isInteger(a.size) && a.size > 1_000_000, slot + ' size must be a real installer size');
+  }
+  assert.equal(LAST_KNOWN_GOOD.repo, 'Kaeva-labs/unblock');
+  // The snapshot must survive being handed out: mutating a served body must not
+  // corrupt the constant for the next request on the same isolate.
+  const b1 = fallbackBody('Kaeva-labs/unblock', 'x');
+  b1.platforms['macos-arm64'].url = 'https://evil/';
+  assert.equal(fallbackBody('Kaeva-labs/unblock', 'x').platforms['macos-arm64'].url, LAST_KNOWN_GOOD.platforms['macos-arm64'].url);
+});
 
 if (failures) { console.error(failures + ' failing'); process.exit(1); }
 console.log('all pickAssets tests passed');

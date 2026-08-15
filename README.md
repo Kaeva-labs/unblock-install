@@ -87,8 +87,30 @@ and maps Tauri v2 bundle assets to platforms (`windows-x64`, `macos-arm64`, `lin
 NSIS `-setup.exe` > `.msi`; arch `.dmg` > `universal.dmg`; `.AppImage` > `.deb` > `.rpm`.
 It tries `releases/latest` first, then falls back to the releases list because
 `releases/latest` excludes prereleases — and the beta ships as `prerelease: true`
-(`v0.1.0-beta`). Responses are edge-cached 5 minutes. If no usable release exists it
-returns `{ "available": false }` and the landing page shows an honest degraded state.
+(`v0.1.0-beta`).
+
+**Resolver v2 — a transport error must never masquerade as "no release".** The
+GitHub calls are UNAUTHENTICATED (no `GITHUB_TOKEN` is provisioned), so they share
+the Pages egress IP's 60 req/hr GitHub limit and **403 under normal traffic**. v1
+answered those 403s with `{ "available": false }` *and cached that body for 5
+minutes*, which is why the `install.kaeva.app` watchdog went red on roughly every
+other run while a public desktop release existed the whole time. v2:
+
+| behaviour | v1 | v2 |
+| --- | --- | --- |
+| GitHub 403 / 404 / network error | `available: false` | `LAST_KNOWN_GOOD`, `available: true`, `"resolved": "fallback"` |
+| failure body cached at the edge | yes, 5 min | **never** — only live successes are cached |
+| which path answered | unknowable from outside | `X-Desktop-Resolver: v2` + `X-Desktop-Resolved: live\|fallback\|none` |
+
+`LAST_KNOWN_GOOD` is an inline, hand-checked snapshot of a real published release
+(inline because Pages routes *every* file under `functions/` as an endpoint).
+**Refresh it — tag, urls, sizes, `published_at` — whenever a newer desktop release
+ships**, together with the pin test in `tests/test_desktop_api.mjs`; otherwise a
+rate-limited edge hands users an older build than the live path would. The fallback
+is repo-scoped: point `DESKTOP_REPO` somewhere else and a failed resolution reports
+an honest `available: false` (`"resolved": "none"`) rather than serving one repo's
+binaries under another's name. A fallback body keeps a `reason` field saying why
+live resolution did not answer.
 
 > ⚠️ **Do NOT publish desktop artifacts to this repo's releases.** `install.sh` /
 > `install.ps1` resolve `releases/latest` of `Kaeva-labs/unblock-install` for the **CLI**;
