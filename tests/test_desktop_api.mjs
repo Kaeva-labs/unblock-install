@@ -256,15 +256,15 @@ await tAsync('FIX: under that SAME 403 the v2 resolver serves the last-known-goo
   const { resp, body } = await runResolver({ fetchImpl: ghRateLimited([]) });
   assert.equal(body.available, true, 'a rate-limited GitHub must never read as "no release"');
   assert.equal(body.resolved, 'fallback', 'the fallback must announce itself honestly');
-  assert.equal(body.version, 'desktop-v0.1.0');
-  assert.equal(body.prerelease, false);
-  assert.equal(body.published_at, '2026-08-15T03:36:35Z');
+  assert.equal(body.version, LAST_KNOWN_GOOD.version);
+  assert.equal(body.prerelease, LAST_KNOWN_GOOD.prerelease);
+  assert.equal(body.published_at, LAST_KNOWN_GOOD.published_at);
   assert.match(body.reason, /HTTP 403/, 'why live resolution failed must survive into the body');
   // The two slots unblock_e2e tests/install.spec.ts asserts on, with real bytes.
   assert.equal(body.platforms['macos-arm64'].url, LAST_KNOWN_GOOD.platforms['macos-arm64'].url);
-  assert.equal(body.platforms['macos-arm64'].size, 45291128);
+  assert.equal(body.platforms['macos-arm64'].size, LAST_KNOWN_GOOD.platforms['macos-arm64'].size);
   assert.equal(body.platforms['windows-x64'].url, LAST_KNOWN_GOOD.platforms['windows-x64'].url);
-  assert.equal(body.platforms['windows-x64'].size, 29206896);
+  assert.equal(body.platforms['windows-x64'].size, LAST_KNOWN_GOOD.platforms['windows-x64'].size);
   assert.equal(resp.headers.get('X-Desktop-Resolver'), 'v2');
   assert.equal(resp.headers.get('X-Desktop-Resolved'), 'fallback');
 });
@@ -323,12 +323,21 @@ await tAsync('the fallback is repo-scoped: a DESKTOP_REPO override gets an hones
   assert.equal(resp.headers.get('X-Desktop-Resolved'), 'none');
 });
 
-t('LAST_KNOWN_GOOD matches the published desktop-v0.1.0 release contract', () => {
-  // Byte-level pins, checked against api.github.com on 2026-08-15. If a newer
-  // desktop release ships, this test is the thing that must be updated with it.
+t('LAST_KNOWN_GOOD is self-consistent and shaped like a real release', () => {
+  // DERIVED, not enumerated. This test used to hardcode `desktop-v0.1.0`, so
+  // refreshing LAST_KNOWN_GOOD — the maintenance action desktop.js explicitly
+  // instructs — could only ever FAIL CI. A test that breaks when you perform
+  // the documented fix is defending the defect. It now checks the INVARIANT
+  // (every asset url points at whatever tag the snapshot names) rather than a
+  // literal that must be hand-edited in lockstep. Freshness vs the LIVE
+  // release is a different question and is not this test's job: it belongs to
+  // unblock_e2e FRESH-G4b, which compares this constant against the published
+  // release and can actually observe drift.
   assert.deepEqual(Object.keys(LAST_KNOWN_GOOD.platforms).sort(), ['macos-arm64', 'windows-x64']);
   for (const [slot, a] of Object.entries(LAST_KNOWN_GOOD.platforms)) {
-    assert.ok(a.url.startsWith('https://github.com/Kaeva-labs/unblock/releases/download/desktop-v0.1.0/'), slot + ' url must point at the pinned tag');
+    const tagPrefix = `https://github.com/Kaeva-labs/unblock/releases/download/${LAST_KNOWN_GOOD.version}/`;
+    assert.ok(a.url.startsWith(tagPrefix), slot + ' url must point at the tag the snapshot names');
+    assert.match(LAST_KNOWN_GOOD.version, /^desktop-v\d+\.\d+\.\d+$/, 'version must be a desktop release tag');
     assert.ok(a.url.endsWith(a.name), slot + ' url must end in its asset name');
     assert.ok(Number.isInteger(a.size) && a.size > 1_000_000, slot + ' size must be a real installer size');
   }
