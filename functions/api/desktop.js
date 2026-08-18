@@ -37,22 +37,22 @@ export const DESKTOP_REPO_DEFAULT = 'Kaeva-labs/unblock';
 // Last-known-good desktop release, inline ON PURPOSE: Cloudflare Pages routes
 // every file under functions/ as a route, so this manifest cannot live in a
 // sibling module without also becoming a public endpoint.
-// Verified against api.github.com 2026-08-15 (tag desktop-v0.1.0, draft:false).
+// Verified against api.github.com 2026-08-17 (tag desktop-v0.1.1, draft:false).
 export const LAST_KNOWN_GOOD = Object.freeze({
   repo: 'Kaeva-labs/unblock',
-  version: 'desktop-v0.1.0',
+  version: 'desktop-v0.1.1',
   prerelease: false,
-  published_at: '2026-08-15T03:36:35Z',
+  published_at: '2026-08-15T23:10:19Z',
   platforms: Object.freeze({
     'macos-arm64': Object.freeze({
-      name: 'UNBLOCK-0.1.0-macos-arm64.dmg',
-      url: 'https://github.com/Kaeva-labs/unblock/releases/download/desktop-v0.1.0/UNBLOCK-0.1.0-macos-arm64.dmg',
-      size: 45291128,
+      name: 'UNBLOCK-0.1.1-macos-arm64.dmg',
+      url: 'https://github.com/Kaeva-labs/unblock/releases/download/desktop-v0.1.1/UNBLOCK-0.1.1-macos-arm64.dmg',
+      size: 36616227,
     }),
     'windows-x64': Object.freeze({
-      name: 'UNBLOCK_0.1.0_x64-setup.exe',
-      url: 'https://github.com/Kaeva-labs/unblock/releases/download/desktop-v0.1.0/UNBLOCK_0.1.0_x64-setup.exe',
-      size: 29206896,
+      name: 'UNBLOCK_0.1.1_x64-setup.exe',
+      url: 'https://github.com/Kaeva-labs/unblock/releases/download/desktop-v0.1.1/UNBLOCK_0.1.1_x64-setup.exe',
+      size: 29177059,
     }),
   }),
 });
