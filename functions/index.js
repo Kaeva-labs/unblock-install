@@ -8,6 +8,11 @@
 // /index.html request to /, which re-enters this function -> infinite
 // 308 loop. Using a non-magic filename breaks the cycle. Observed bug
 // at install.kaeva.app standup 2026-05-28 17:23 UTC.
+//
+// Security headers come from lib/http-headers.js, NOT from _headers: Cloudflare
+// does not apply _headers to Pages Functions responses, and `/` is a Function.
+
+import { secureResponse, withSecurityHeaders } from '../lib/http-headers.js';
 
 export async function onRequest(context) {
   const { request, env } = context;
@@ -21,7 +26,12 @@ export async function onRequest(context) {
   if (isBrowser && !wantsPs1) {
     // Static asset; non-magic filename avoids CF Pages' /index.html -> /
     // canonical redirect that would loop back through this function.
-    return env.ASSETS.fetch(new Request(new URL('/landing.html', url), request));
+    // secureResponse keeps the asset server's Content-Type/ETag/Cache-Control
+    // and streams the body, adding the security headers + document CSP.
+    return secureResponse(
+      await env.ASSETS.fetch(new Request(new URL('/landing.html', url), request)),
+      { document: true },
+    );
   }
 
   const target = wantsPs1 ? '/install.ps1' : '/install.sh';
@@ -35,10 +45,10 @@ export async function onRequest(context) {
   // Re-wrap so we control headers cleanly
   return new Response(resp.body, {
     status: 200,
-    headers: {
+    headers: withSecurityHeaders({
       'Content-Type': contentType,
       'Cache-Control': 'public, max-age=300',
       'X-Served-By': 'unblock-install/functions/index.js',
-    },
+    }),
   });
 }

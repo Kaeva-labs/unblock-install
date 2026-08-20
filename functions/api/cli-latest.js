@@ -22,6 +22,8 @@
 // field the installers parse ({ "tag_name": "vX.Y.Z" }), so install.sh and
 // install.ps1 use a single parser for both the pointer and the fallback.
 
+import { withSecurityHeaders } from '../../lib/http-headers.js';
+
 export const CLI_REPO_DEFAULT = 'Kaeva-labs/unblock-install';
 
 // https://github.com/<repo>/releases/tag/v0.1.7 -> "v0.1.7" (null if not a
@@ -92,11 +94,11 @@ export async function onRequest(context) {
       source: 'github.com/' + repo,
     }), {
       status: 503,
-      headers: {
+      headers: withSecurityHeaders({
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
         'X-Served-By': 'unblock-install/functions/api/cli-latest.js',
-      },
+      }),
     });
   }
 
@@ -106,12 +108,12 @@ export async function onRequest(context) {
     repo,
     resolved_at: new Date().toISOString(),
   }), {
-    headers: {
+    headers: withSecurityHeaders({
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'public, max-age=300',
       'Access-Control-Allow-Origin': '*',
       'X-Served-By': 'unblock-install/functions/api/cli-latest.js',
-    },
+    }),
   });
   if (cache && context.waitUntil) context.waitUntil(cache.put(cacheKey, resp.clone()));
   return resp;

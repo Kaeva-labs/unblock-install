@@ -32,6 +32,11 @@
 // urls, sizes, published_at — whenever a newer desktop release ships, or a
 // rate-limited edge will hand users an older build than the live path would.
 
+// Security headers live in lib/http-headers.js — OUTSIDE functions/, which is
+// exactly why importing it does not mint a route the way the note below warns
+// about. Only functions/ is route-mapped; Pages bundles imports from elsewhere.
+import { withSecurityHeaders } from '../../lib/http-headers.js';
+
 export const DESKTOP_REPO_DEFAULT = 'Kaeva-labs/unblock';
 
 // Last-known-good desktop release, inline ON PURPOSE: Cloudflare Pages routes
@@ -214,7 +219,7 @@ export async function onRequest(context) {
 
   const body = live || fallbackBody(repo, reason);
   const resp = new Response(JSON.stringify(body), {
-    headers: {
+    headers: withSecurityHeaders({
       'Content-Type': 'application/json; charset=utf-8',
       // A non-live body is deliberately short-lived downstream: it must not
       // outlive the next successful live resolution by more than a minute.
@@ -223,7 +228,7 @@ export async function onRequest(context) {
       'X-Served-By': 'unblock-install/functions/api/desktop.js',
       'X-Desktop-Resolver': 'v2',
       'X-Desktop-Resolved': body.resolved,
-    },
+    }),
   });
   // LIVE SUCCESSES ONLY. Caching a failure body is what turned one rate-limited
   // GitHub call into 5 minutes of "no desktop release" for every visitor.

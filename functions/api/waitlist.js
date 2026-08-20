@@ -18,6 +18,8 @@
 // project plus dedupe-by-email (idempotent upsert) in the upstream store; both
 // are part of the deploy/contract checklist, documented in the README.
 
+import { withSecurityHeaders } from '../../lib/http-headers.js';
+
 export function validEmail(s) {
   if (typeof s !== 'string') return false;
   const e = s.trim();
@@ -29,7 +31,7 @@ export function validEmail(s) {
 function json(status, body) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    headers: withSecurityHeaders({ 'Content-Type': 'application/json; charset=utf-8' }),
   });
 }
 

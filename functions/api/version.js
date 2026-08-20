@@ -5,6 +5,8 @@
 // CF_PAGES_BRANCH at build time; if absent (local dev, misconfig) we say so
 // honestly instead of echoing a default.
 
+import { withSecurityHeaders } from '../../lib/http-headers.js';
+
 export async function onRequest(context) {
   const env = context.env || {};
   return new Response(JSON.stringify({
@@ -13,10 +15,10 @@ export async function onRequest(context) {
     branch: env.CF_PAGES_BRANCH || null,
     provenance: env.CF_PAGES_COMMIT_SHA ? 'cf-pages-build-env' : 'unknown (CF_PAGES_* not present)',
   }), {
-    headers: {
+    headers: withSecurityHeaders({
       'Content-Type': 'application/json; charset=utf-8',
       'Cache-Control': 'public, max-age=60',
       'X-Served-By': 'unblock-install/functions/api/version.js',
-    },
+    }),
   });
 }
